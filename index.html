@@ -42,9 +42,6 @@
             max-width: 100%;
             max-height: 100%;
             object-fit: contain;
-            /* PERF/UX: DPR sistemiyle canvas içsel boyut DPR×390/844 olacak,
-               CSS bu mantıksal boyutu koruyacak (görsel olarak 390x844 görünür) */
-            image-rendering: auto;
         }
     </style>
 </head>
@@ -56,79 +53,68 @@
         const ctx = canvas.getContext('2d');
 
         // ============================================================
-        //  DPR (Device Pixel Ratio) — AKILLI ADAPTIF YÜKSEK ÇÖZÜNÜRLÜK
+        //  DPR (Device Pixel Ratio) — GÜVENLİ ADAPTIF YÜKSEK ÇÖZÜNÜRLÜK
         // ============================================================
         // Sorun: Mobilde canvas yüksek çözünürlüklü ekranda bulanık görünür.
-        // Çözüm: Canvas içsel piksel sayısını DPR ile çarpıp ctx.scale() ile düzelt.
-        // Kod canvas.width'i hep 390 sanmaya devam eder (mantıksal pikseller).
-        // Performans için FPS'e göre 1.0/1.5/2.0 arası adapte eder.
+        // Yaklaşım: Canvas internal piksel boyutunu büyüt, CSS ile mantıksal boyutta tut,
+        //           her frame başında ctx.setTransform ile DPR scale'i UYUMLU TUT.
+        //           Hiçbir property override etmiyoruz - sadece transform işliyor.
         
-        const _LOGICAL_W = 390;
-        const _LOGICAL_H = 844;
-        let _currentDPR = 1.0;  // başlangıçta DPR 1 (hızlı), FPS ölçüldükten sonra ayarlanır
-        let _dprApplied = false; // bir kere ayarlandıktan sonra tekrar tekrar değiştirmiyoruz
+        const _LOGICAL_W = 390;  // oyun kodunun bildiği mantıksal genişlik
+        const _LOGICAL_H = 844;  // oyun kodunun bildiği mantıksal yükseklik
         
-        // canvas.width / .height'ı gerçek piksel sayısı yapar ama CSS hep 390x844 görünür
-        function applyDPR(targetDPR) {
-            // Cihazın gerçek piksel ratio'su (maks 3 ile sınırlayalım, 4K telefonlar var)
-            const realDPR = Math.min(3, window.devicePixelRatio || 1);
-            // Talep edilen DPR + cihazın gerçek DPR'ı: ikisinin minimumu
-            // (cihaz 2x ise 2 yeterli; biz 2 istedik ama cihaz sadece 1.5 destekliyorsa 1.5 olur)
-            const dpr = Math.min(targetDPR, realDPR);
-            
-            // Canvas içsel piksel sayısı = mantıksal × dpr
+        // DPR seçimi: cihazın gerçek pixel ratio'su, maks 2 ile sınırlı
+        // (2'den fazla görsel kazanç yok ama performans cezası büyük)
+        const _DEVICE_DPR = Math.min(2, window.devicePixelRatio || 1);
+        let _activeDPR = _DEVICE_DPR;
+        
+        // Canvas'ın internal piksel buffer'ını DPR ile büyüt
+        function setupCanvasDPR(dpr) {
+            _activeDPR = dpr;
+            // Internal buffer büyür (gerçek piksel sayısı)
             canvas.width = Math.round(_LOGICAL_W * dpr);
             canvas.height = Math.round(_LOGICAL_H * dpr);
-            // CSS boyutu mantıksal piksel (görsel olarak aynı kalır)
+            // CSS boyutu mantıksal piksel (görünür boyut değişmez)
             canvas.style.width = _LOGICAL_W + 'px';
             canvas.style.height = _LOGICAL_H + 'px';
-            
-            // Tüm çizimleri DPR oranında ölçeklendir.
-            // Önemli: setTransform kullanıyoruz, böylece tekrar tekrar uygulansa da birikmez.
-            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-            
-            _currentDPR = dpr;
-            
-            // canvas.width/height artık fiziksel piksel sayısı dönüyor.
-            // Eski kod canvas.width = 390 sanıyor. Bunu sahte yapmak için getter override edebilirdik
-            // ama riskli; bunun yerine her yerde _LOGICAL_W kullanılması gereken yerler kalsın,
-            // ve mevcut kod ile canvas.width arasında tutarlılık için iki property override edelim.
         }
         
-        // İlk başta DPR 1 ile başla (FPS ölçümü yapılana kadar güvenli)
-        applyDPR(1.0);
+        // İlk kurulum
+        setupCanvasDPR(_DEVICE_DPR);
         
-        // canvas.width/.height eski kod için 390/844 dönmeli — getter ile sahte yapalım.
-        // Bu, oyun kodundaki yüzlerce canvas.width referansını değiştirmemizi engeller.
-        Object.defineProperty(canvas, 'width', {
-            get: function() { return _LOGICAL_W; },
-            set: function(v) { /* dış kod set etmeye çalışırsa sessizce yoksay */ },
-            configurable: true
-        });
-        Object.defineProperty(canvas, 'height', {
-            get: function() { return _LOGICAL_H; },
-            set: function(v) { /* dış kod set etmeye çalışırsa sessizce yoksay */ },
-            configurable: true
-        });
-        
-        // FPS ölçümünden sonra çağrılır: cihaz hızına göre DPR'ı yükseltir
-        function maybeUpgradeDPR(measuredFps) {
-            if (_dprApplied) return; // bir kere yaptık, tekrar tekrar değiştirmiyoruz (titremesin)
-            
-            let targetDPR;
-            if (measuredFps >= 55) {
-                targetDPR = 2.0; // güçlü cihaz, tam keskinlik
-            } else if (measuredFps >= 40) {
-                targetDPR = 1.5; // orta cihaz, dengeli
-            } else {
-                targetDPR = 1.0; // zayıf cihaz, mevcut performans korunur
-            }
-            
-            // PC'lerde devicePixelRatio genellikle 1, mobile 2-3 olur.
-            // PC'de zaten 1 olduğu için yükseltsek de fark olmaz, gereksiz iş olmaz.
-            applyDPR(targetDPR);
-            _dprApplied = true;
+        // Oyun kodunda canvas.width/height kullanan yerler internal buffer'a değil,
+        // mantıksal değere bakmalı. Bu yüzden override ediyoruz.
+        // ÖNEMLI: configurable: true ile, daha sonra tarayıcı set ederse çakışma olmasın
+        try {
+            Object.defineProperty(canvas, 'width', {
+                get() { return _LOGICAL_W; },
+                set(v) { /* eski oyun kodu set etmeye çalışırsa yoksay */ },
+                configurable: true
+            });
+            Object.defineProperty(canvas, 'height', {
+                get() { return _LOGICAL_H; },
+                set(v) { /* yoksay */ },
+                configurable: true
+            });
+        } catch(e) {
+            // Eğer override başarısız olursa DPR'ı kapat, kullanıcı bulanık ama çalışan oyun görsün
+            console.warn('[DPR] property override başarısız, DPR kapatılıyor', e);
+            _activeDPR = 1;
+            canvas.width = _LOGICAL_W;
+            canvas.height = _LOGICAL_H;
+            canvas.style.width = _LOGICAL_W + 'px';
+            canvas.style.height = _LOGICAL_H + 'px';
         }
+        
+        // KRİTİK: Her frame başında transform'u yeniden uygula.
+        // Bu sayede bir yerde sıfırlansa bile bir sonraki frame'de düzelir.
+        // ctx.save/restore zincirleri içinde kalmayacak (kontrol bizde).
+        function applyDPRTransform() {
+            ctx.setTransform(_activeDPR, 0, 0, _activeDPR, 0, 0);
+        }
+        
+        // Başlangıçta da uygula (ilk birkaç çizim için)
+        applyDPRTransform();
 
         // ============================================================
         //  REKLAM SİSTEMİ (AdMob / Web Interstitial placeholder)
@@ -2254,6 +2240,12 @@
             let nowTime = performance.now();
             dt = Math.min(2.5, (nowTime - lastFrameTime) / 8.33);
             lastFrameTime = nowTime;
+            
+            // DPR transform'u her frame başında uygula.
+            // Oyun kodunda ctx.save/restore zincirleri var, identity transform'a dönülebilir.
+            // Bu satır her frame'de sıfırdan transform'u DPR×DPR olarak ayarlar.
+            // Hiçbir save/restore içinde değil, en üst seviyede.
+            ctx.setTransform(_activeDPR, 0, 0, _activeDPR, 0, 0);
 
             // ─── PERFORMANS: FPS sayımı + Adaptive ambient ───
             _fpsFrameCount++;
@@ -2268,13 +2260,6 @@
                     _ambientParticleTarget = 25;
                 } else if (avg > 58 && _ambientParticleTarget < 50) {
                     _ambientParticleTarget = 50;
-                }
-                // DPR yükseltme - sadece bir kez, ilk 3 saniyenin ortalaması alındıktan sonra
-                // Bu sayede cihazın gerçek hızı belli olur, doğru DPR seçilir
-                if (!_dprApplied && _fpsHistory[0] >= 30) {
-                    // _fpsHistory başlangıçta [60,60,60] dolu, gerçek ölçüm geldiğinde ortalama düzgün olur
-                    // İlk gerçek ölçüm sonrası DPR'ı uygula
-                    maybeUpgradeDPR(avg);
                 }
             }
             if (gameState.state === 'MENU') {
