@@ -1,0 +1,3589 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Pour Down — Bardağı Eğilt, Sıvıyı Dök!</title>
+
+    <!-- SEO -->
+    <meta name="description" content="Pour Down: Bardağı eğilterek alt bardaca sıvı dök. Kaç tur dayanabilirsin?">
+    <meta name="keywords" content="pour down, oyun, mobil oyun, bardağ, sıvı, fizik oyunu">
+    <meta name="author" content="Pour Down Studio">
+    <meta name="theme-color" content="#0d1b2a">
+
+    <!-- Open Graph (Sosyal Medya Paylaşımı) -->
+    <meta property="og:title" content="Pour Down">
+    <meta property="og:description" content="Bardağı eğilt, sıvıyı dök! Kaç tura dayanabilirsin?">
+    <meta property="og:type" content="game">
+    <meta property="og:locale" content="tr_TR">
+
+    <!-- PWA -->
+    <link rel="manifest" href="manifest.json">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Pour Down">
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&display=swap');
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #000;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            overflow: hidden;
+            touch-action: none;
+        }
+        canvas {
+            background-color: #0d1b2a;
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="c" width="390" height="844"></canvas>
+
+    <script>
+        const canvas = document.getElementById('c');
+        const ctx = canvas.getContext('2d');
+
+        // ============================================================
+        //  REKLAM SİSTEMİ (AdMob / Web Interstitial placeholder)
+        //  Gerçek SDK entegrasyonunda bu fonksiyonları override et.
+        // ============================================================
+        const adSystem = {
+            lossCount: 0,          // kaç kez kaybedildi
+            continueUsed: false,   // " Devam Et" hakkı kullanıldı mı?
+
+            // Her yenilmede çağrılır
+            onGameOver() {
+                this.lossCount++;
+                if (this.lossCount % 2 === 0) {
+                    this.showInterstitial(() => { /* reklam kapandı */ });
+                }
+            },
+
+            // Interstitial reklam göster
+            showInterstitial(cb) {
+                // TODO: AdMob SDK'sı hazır olduğunda buraya entegre et
+                // admob.showInterstitial().then(cb);
+                console.log('[AD] Interstitial gösterilecek');
+                if (cb) cb();
+            },
+
+            // Rewarded reklam: izlerse +20% sıvı ile devam
+            showRewarded(onRewarded, onSkipped) {
+                if (this.continueUsed) { if (onSkipped) onSkipped(); return; }
+                // TODO: AdMob rewarded
+                // admob.showRewarded().then(rewarded => rewarded ? onRewarded() : onSkipped());
+                console.log('[AD] Rewarded reklam gösterilecek');
+                // Simüle: her zaman ödül ver (test mod)
+                this.continueUsed = true;
+                if (onRewarded) onRewarded();
+            },
+
+            reset() { this.continueUsed = false; }
+        };
+
+        // Adım 1: Oyun Durumu (Game State)
+        const gameState = {
+            state: 'MENU', // 'MENU', 'PLAYING', 'PAUSED', 'GAMEOVER'
+            level: 1,
+            score: 0,
+            highScore: parseInt(localStorage.getItem('pourDownHighScore')) || 0,
+            soundEnabled: localStorage.getItem('pourDownSound') !== 'false',
+            musicEnabled: localStorage.getItem('pourDownMusic') !== 'false',
+            isTransitioning: false,
+            totalLiquid: 100, // 0-100 arası, tüm oyun boyunca takip edilir
+            isNewHighScore: false
+        };
+
+        // ============================================================
+        //  BAŞARIM SİSTEMİ
+        // ============================================================
+        const achievementDefs = [
+            { id: 'first_pour', icon: '💧', name: 'İlk Damla',     desc: 'İlk dökmeyi yaptın!' },
+            { id: 'level5',     icon: '⭐', name: 'Çaylak',         desc: "Level 5'e ulaştın" },
+            { id: 'level10',    icon: '🏆', name: 'Uzman',          desc: "Level 10'a ulaştın" },
+            { id: 'level20',    icon: '👑', name: 'Efsane',         desc: "Level 20'ye ulaştın" },
+            { id: 'level50',    icon: '💎', name: 'Efsanevi',       desc: "Level 50'ye ulaştın" },
+            { id: 'perfect',    icon: '🎯', name: 'Mükemmel',       desc: 'Alt bardağı tam doldurdun' },
+            { id: 'fire5',      icon: '🔥', name: 'Ateşli',         desc: '5 ardışık mükemmel doldurma' },
+            { id: 'saver',      icon: '🌊', name: 'Tasarrufçu',     desc: '%80 sıvı ile 5 tur geç' },
+            { id: 'rainbow',    icon: '🌈', name: 'Gökkuşağı',      desc: 'Tüm 6 renk temasını gör' },
+            { id: 'speed',      icon: '⚡', name: 'Hızlı El',       desc: 'Bir turu 5 saniyede geç' },
+        ];
+        let unlockedAchievements = JSON.parse(localStorage.getItem('pourDownAchievements') || '[]');
+        let toastQueue = [];
+        let currentToast = null;
+        let perfectStreak = 0;
+        let seenThemes = new Set();
+        let levelStartTime = 0;
+        let comboCount = 0;       // ard arda yüksek dolum sayısı
+        let comboMultiplier = 1;  // puan çarpanı
+        let pourNoiseNode = null; // akan su sesi
+        let themeFlashTimer = 0;       // tema değişiminde ekran flash
+        let themeAnnounceTimer = 0;    // tema ismi gösterim süresi (frame)
+        let themeAnnounceData = null;
+
+        // ============================================================
+        //  GÜNLÜK GÖREV SİSTEMİ
+        // ============================================================
+        const missionPool = [
+            { id:'m_level5',   icon:'⭐', text:'Level 5\'e ulaş',       type:'level',  target:5,   bonus:50  },
+            { id:'m_level10',  icon:'🏆', text:'Level 10\'a ulaş',      type:'level',  target:10,  bonus:100 },
+            { id:'m_combo2',   icon:'✨', text:'2\'li kombo yap',        type:'combo',  target:2,   bonus:40  },
+            { id:'m_combo3',   icon:'⚡', text:'3\'lü kombo yap',        type:'combo',  target:3,   bonus:80  },
+            { id:'m_score200', icon:'💰', text:'200 puan kazan',         type:'score',  target:200, bonus:60  },
+            { id:'m_score500', icon:'💎', text:'500 puan kazan',         type:'score',  target:500, bonus:150 },
+            { id:'m_saver',    icon:'🌊', text:'%60+ sıvıyla 3 tur geç', type:'saver',  target:3,   bonus:70  },
+            { id:'m_speed',    icon:'🚀', text:'Turu 5 sn\'de bitir',    type:'speed',  target:1,   bonus:60  },
+        ];
+
+        function getTodayKey() {
+            let d = new Date(); return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+        }
+        function loadDailyMissions() {
+            let saved = JSON.parse(localStorage.getItem('pourDownMissions') || 'null');
+            if (!saved || saved.day !== getTodayKey()) {
+                // Yeni gün → 3 rastgele görev seç
+                let pool = [...missionPool].sort(() => Math.random() - 0.5).slice(0, 3);
+                saved = { day: getTodayKey(), missions: pool.map(m => ({ ...m, progress: 0, done: false })) };
+                localStorage.setItem('pourDownMissions', JSON.stringify(saved));
+            }
+            return saved.missions;
+        }
+        function saveDailyMissions() {
+            localStorage.setItem('pourDownMissions', JSON.stringify({ day: getTodayKey(), missions: dailyMissions }));
+        }
+        let dailyMissions = loadDailyMissions();
+        let saverTurns = 0; // %60+ sıvıyla geçilen tur sayısı
+
+        function updateMissions(event, data) {
+            let changed = false;
+            dailyMissions.forEach(m => {
+                if (m.done) return;
+                if (m.type === 'level'  && event === 'level_complete' && gameState.level >= m.target)
+                    { m.progress = gameState.level; }
+                if (m.type === 'combo'  && event === 'level_complete' && comboCount >= m.target)
+                    { m.progress = comboCount; }
+                if (m.type === 'score'  && event === 'level_complete' && gameState.score >= m.target)
+                    { m.progress = gameState.score; }
+                if (m.type === 'speed'  && event === 'speed_level'   ) { m.progress++; }
+                if (m.type === 'saver'  && event === 'saver_level'   ) { m.progress++; }
+                if (!m.done && m.progress >= m.target) {
+                    m.done = true; changed = true;
+                    gameState.score += m.bonus;
+                    toastQueue.push({ icon: m.icon, name: 'GÖREV TAMAM!', desc: m.text + ' (+' + m.bonus + ' puan)', timer: 220 });
+                }
+            });
+            if (changed) saveDailyMissions();
+        }
+
+        function unlockAchievement(id) {
+            if (unlockedAchievements.includes(id)) return;
+            unlockedAchievements.push(id);
+            localStorage.setItem('pourDownAchievements', JSON.stringify(unlockedAchievements));
+            let def = achievementDefs.find(a => a.id === id);
+            if (def) toastQueue.push({ ...def, timer: 200 });
+        }
+
+        function checkAchievements(event, data) {
+            if (event === 'pour_start') { unlockAchievement('first_pour'); }
+            if (event === 'level_complete') {
+                let lvl = gameState.level;
+                if (lvl >= 5)  unlockAchievement('level5');
+                if (lvl >= 10) unlockAchievement('level10');
+                if (lvl >= 20) unlockAchievement('level20');
+                if (lvl >= 50) unlockAchievement('level50');
+                if (data && data.fillPct >= 95) {
+                    unlockAchievement('perfect');
+                    perfectStreak++;
+                    if (perfectStreak >= 5) unlockAchievement('fire5');
+                } else { perfectStreak = 0; }
+                if (Date.now() - levelStartTime < 5000) unlockAchievement('speed');
+                if (lvl >= 5 && gameState.totalLiquid >= 80) unlockAchievement('saver');
+                let themeIdx = Math.floor((lvl - 1) / 5) % 6;
+                seenThemes.add(themeIdx);
+                if (seenThemes.size >= 6) unlockAchievement('rainbow');
+            }
+        }
+
+        function drawToast() {
+            if (!currentToast && toastQueue.length > 0) { currentToast = toastQueue.shift(); }
+            if (!currentToast) return;
+            currentToast.timer--;
+            if (currentToast.timer <= 0) { currentToast = null; return; }
+            let t = currentToast.timer;
+            let alpha = t > 170 ? (200 - t) / 30 : (t < 40 ? t / 40 : 1);
+            let ty = 110;
+            ctx.save();
+            ctx.globalAlpha = alpha;
+            // Panel
+            ctx.fillStyle = 'rgba(5,18,40,0.94)';
+            ctx.beginPath(); ctx.roundRect(canvas.width/2 - 155, ty - 28, 310, 56, 28); ctx.fill();
+            let tBorder = currentTheme.liquid.map(Math.round);
+            ctx.strokeStyle = `rgba(${tBorder[0]},${tBorder[1]},${tBorder[2]},0.7)`;
+            ctx.lineWidth = 1.5; ctx.stroke();
+            // İkon
+            ctx.font = '22px serif'; ctx.textAlign = 'left';
+            ctx.fillStyle = 'white';
+            ctx.fillText(currentToast.icon, canvas.width/2 - 130, ty + 7);
+            // Etiket
+            ctx.font = "bold 11px 'Bebas Neue', cursive";
+            ctx.fillStyle = `rgba(${tBorder[0]},${tBorder[1]},${tBorder[2]},1)`;
+            ctx.fillText('BAŞARIM AÇILDI!', canvas.width/2 - 97, ty - 8);
+            // Ad
+            ctx.font = "bold 18px 'Bebas Neue', cursive";
+            ctx.fillStyle = 'white';
+            ctx.fillText(currentToast.name, canvas.width/2 - 97, ty + 11);
+            // Açıklama
+            ctx.font = "12px 'Bebas Neue', cursive";
+            ctx.fillStyle = 'rgba(200,220,255,0.75)';
+            ctx.fillText(currentToast.desc, canvas.width/2 - 97, ty + 26);
+            ctx.restore();
+        }
+
+        // Tema ve Dinamik Arka Plan Sistemi
+        const themes = [
+            { name: 'SU',     icon: '💧', viscosity: 1.0, shape: 'normal',   bgInner: [18, 38, 62],  bgOuter: [4, 10, 22],  liquid: [79, 195, 247]  },
+            { name: 'LAV',    icon: '🔥', viscosity: 0.65,shape: 'volcano',  bgInner: [50, 22, 4],   bgOuter: [18, 5, 0],   liquid: [255, 120, 20]  },
+            { name: 'ZEHİR',  icon: '☢️', viscosity: 1.3, shape: 'flask',    bgInner: [8, 44, 16],   bgOuter: [2, 14, 4],   liquid: [0, 230, 100]   },
+            { name: 'ALTIN',  icon: '💰', viscosity: 0.75,shape: 'goblet',   bgInner: [44, 38, 4],   bgOuter: [16, 12, 0],  liquid: [255, 210, 40]  },
+            { name: 'BAL',    icon: '🍯', viscosity: 0.60,shape: 'honey',    bgInner: [40, 25, 5],   bgOuter: [15, 10, 0],  liquid: [255, 170, 0]   },
+            { name: 'GECE',   icon: '🌌', viscosity: 1.4, shape: 'mystic',   bgInner: [22, 14, 48],  bgOuter: [6, 4, 18],   liquid: [160, 110, 240] }
+        ];
+
+        let currentTheme = {
+            bgInner: [...themes[0].bgInner],
+            bgOuter: [...themes[0].bgOuter],
+            liquid: [...themes[0].liquid]
+        };
+
+        let lastThemeIndex = 0;
+        let themeRings = [];
+
+        function lerp(start, end, amt) {
+            return (1 - amt) * start + amt * end;
+        }
+
+        function lerpArray(a, b, t) {
+            let out = [];
+            for(let i = 0; i < a.length; i++) {
+                out.push(a[i] + (b[i] - a[i]) * t);
+            }
+            return out;
+        }
+
+        // Menü Butonları Alanları
+        const btnPlay = { x: 195, y: 550, w: 220, h: 80 }; // Daha büyük Oyna butonu
+        const btnSound = { x: 350, y: 35, r: 20 }; // Ana Menü Ses Butonu
+        const btnPause = { x: 350, y: 35, r: 20 };
+        const btnResume = { x: 195, y: 380, w: 160, h: 60 };
+        const btnMainMenu = { x: 195, y: 470, w: 160, h: 60 };
+        const btnReplay       = { x: 195, y: 532, w: 320, h: 70 };
+        const btnGameOverMenu = { x: 195, y: 602, w: 280, h: 48 };
+        const btnContinue     = { x: 195, y: 466, w: 280, h: 40 };
+        let btnReplayPause = null;
+        let btnSoundToggle = null;
+        let btnMusicToggle = null;
+        // Combo popup feedback sistemi
+        let comboPopups = [];
+        let lastComboLevel = 0;
+
+        let gameOverStartTime = 0;
+        let tutorialTimer = 0;
+
+        function isInsideRect(x, y, rect) {
+            return x >= rect.x - rect.w/2 && x <= rect.x + rect.w/2 &&
+                   y >= rect.y - rect.h/2 && y <= rect.y + rect.h/2;
+        }
+
+        function isInsideCircle(x, y, circle) {
+            let dx = x - circle.x;
+            let dy = y - circle.y;
+            return dx*dx + dy*dy <= circle.r * circle.r;
+        }
+
+        function getPointerPos(e) {
+            let rect = canvas.getBoundingClientRect();
+            let clientX = e.clientX;
+            if (clientX === undefined && e.touches) clientX = e.touches[0].clientX;
+            let clientY = e.clientY;
+            if (clientY === undefined && e.touches) clientY = e.touches[0].clientY;
+            
+            let x = (clientX - rect.left) * (canvas.width / rect.width);
+            let y = (clientY - rect.top) * (canvas.height / rect.height);
+            return { x, y };
+        }
+
+        let cameraY = 0;
+        let targetCameraY = 0;
+
+        // Üst Bardak (Oyuncu)
+        // GDD'ye göre 1. tur boyutları: w=90, h=110
+        const topCup = {
+            x: 195,
+            y: 250,
+            w: 90,
+            h: 110,
+            fill: 100,
+            angle: 0
+        };
+
+        // Alt Bardak (Hedef)
+        const targetCup = {
+            x: 0,
+            y: 0,
+            w: 90,
+            h: 110,
+            fill: 0,
+            angle: 0, // Alt bardak düz durur
+            speed: 0,
+            dir: 1
+        };
+
+        // Sıvı akış parçacıkları (Adım 3)
+        const streamParticles = [];
+        const splashParticles = []; // Sıvı alt bardağa çarpınca oluşan sıçrama
+        const ripples = [];         // Sıvı yüzeyinde genişleyen halka
+
+        // ─── PERFORMANS: Pool kaldırıldı (color array referansı bug'ı). Sadece swap-and-pop kullanılıyor. ───
+        // Dummy stub'lar — eski pool çağrılarını bozmamak için (her seferinde yeni obje döndürüyor)
+        const particlePool = {
+            getStream()    { return {}; },
+            releaseStream(p)    {},
+            getSplash()    { return {}; },
+            releaseSplash(p)    {},
+            getRipple()    { return {}; },
+            releaseRipple(p)    {},
+            getBurst()     { return {}; },
+            releaseBurst(p)     {},
+            getExplosion() { return {}; },
+            releaseExplosion(p) {},
+            getFloat()     { return {}; },
+            releaseFloat(p)     {}
+        };
+
+        // ─── PERFORMANS: FPS Monitoring + Adaptive Ambient ───
+        let _fpsFrameCount = 0;
+        let _fpsLastCheck = performance.now();
+        let _currentFps = 60;
+        let _fpsHistory = [60, 60, 60];
+        let _ambientParticleTarget = 50;
+
+        // Oyun içi atmosfer parçacıkları (arka plan)
+        const ambientParticles = [];
+        for (let _i = 0; _i < 50; _i++) {
+            ambientParticles.push({
+                x: Math.random() * 390,
+                y: Math.random() * 844,
+                r: 0.8 + Math.random() * 2.8,
+                vy: -0.18 - Math.random() * 0.45,
+                vx: (Math.random() - 0.5) * 0.18,
+                alpha: 0.07 + Math.random() * 0.22,
+                phase: Math.random() * Math.PI * 2,
+                twinkle: Math.random() * Math.PI * 2,  // yıldız parlama fazı
+                life: Math.random()                       // kıvılcım/damla yaşam döngüsü
+            });
+        }
+
+        // Level Up Efekt Değişkenleri
+        let burstLines = [];
+        let explosionParticles = [];
+        let floatingTexts = [];
+
+        // Web Audio API
+        let audioCtx = null;
+        let masterGain = null;
+        function initAudio() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                masterGain = audioCtx.createGain();
+                masterGain.gain.value = 0.7;  // Tüm seslerin global ses seviyesi
+                masterGain.connect(audioCtx.destination);
+            }
+        }
+        
+        function playDing() {
+            if (!audioCtx || !gameState.soundEnabled) return;
+            const t = audioCtx.currentTime;
+            
+            // Tok bas vuruş
+            const sub = audioCtx.createOscillator();
+            const subGain = audioCtx.createGain();
+            sub.type = 'sine';
+            sub.frequency.setValueAtTime(220, t);
+            sub.frequency.exponentialRampToValueAtTime(110, t + 0.08);
+            subGain.gain.setValueAtTime(0, t);
+            subGain.gain.linearRampToValueAtTime(0.5, t + 0.005);
+            subGain.gain.exponentialRampToValueAtTime(0.001, t + 0.18);
+            sub.connect(subGain); subGain.connect(masterGain);
+            sub.start(t); sub.stop(t + 0.2);
+            
+            // Üst parlak ton (E5 — canlı his)
+            const top = audioCtx.createOscillator();
+            const topGain = audioCtx.createGain();
+            const topFilt = audioCtx.createBiquadFilter();
+            top.type = 'triangle';
+            top.frequency.value = 659.25;  // E5
+            topFilt.type = 'lowpass';
+            topFilt.frequency.value = 2500;
+            topGain.gain.setValueAtTime(0, t);
+            topGain.gain.linearRampToValueAtTime(0.32, t + 0.008);
+            topGain.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
+            top.connect(topFilt); topFilt.connect(topGain); topGain.connect(masterGain);
+            top.start(t); top.stop(t + 0.27);
+        }
+
+        // Pürüzsüz Su Sesi (Sadece saf su akıntısı hissi)
+        function startPourSound() {
+            if (!audioCtx || !gameState.soundEnabled || pourNoiseNode) return;
+
+            // ─── KATMAN 1: PEMBE GÜRÜLTÜ TABANI (ana akış sesi) ───
+            const bufSize = audioCtx.sampleRate * 2;
+            const buf = audioCtx.createBuffer(1, bufSize, audioCtx.sampleRate);
+            const d = buf.getChannelData(0);
+            let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
+            for (let i = 0; i < bufSize; i++) {
+                let white = Math.random() * 2 - 1;
+                b0 = 0.99886 * b0 + white * 0.0555179;
+                b1 = 0.99332 * b1 + white * 0.0750759;
+                b2 = 0.96900 * b2 + white * 0.1538520;
+                b3 = 0.86650 * b3 + white * 0.3104856;
+                b4 = 0.55000 * b4 + white * 0.5329522;
+                b5 = -0.7616 * b5 - white * 0.0168980;
+                d[i] = b0 + b1 + b2 + b3 + b4 + b5 + b6 + white * 0.5362;
+                d[i] *= 0.12;
+                b6 = white * 0.115926;
+            }
+            const src = audioCtx.createBufferSource();
+            src.buffer = buf; src.loop = true;
+
+            // Tema tipine göre filtre frekansı seç (akış karakteri)
+            let _themeIdx = Math.floor((gameState.level - 1) / 5) % themes.length;
+            let baseFreq = 1400;
+            if (_themeIdx === 0) baseFreq = 1600;        // Su: temiz, parlak
+            else if (_themeIdx === 1) baseFreq = 700;    // Lav: derin, boğuk
+            else if (_themeIdx === 2) baseFreq = 2200;   // Zehir: tiz, sislenmiş
+            else if (_themeIdx === 3) baseFreq = 1200;   // Altın: orta, metalik
+            else if (_themeIdx === 4) baseFreq = 900;    // Kan: kalın, ağır
+            else if (_themeIdx === 5) baseFreq = 1800;   // Gece: hayalet gibi
+
+            const filt = audioCtx.createBiquadFilter();
+            filt.type = 'lowpass';
+            filt.frequency.value = baseFreq;
+            filt.Q.value = 0.7;
+
+            // ─── KATMAN 2: HAFİF YÜKSEK FREKANS PARILTI (su damlacığı dokusu) ───
+            const sparkleBuf = audioCtx.createBuffer(1, audioCtx.sampleRate * 1.5, audioCtx.sampleRate);
+            const sd = sparkleBuf.getChannelData(0);
+            for (let i = 0; i < sd.length; i++) {
+                sd[i] = (Math.random() * 2 - 1) * 0.3;
+            }
+            const sparkleSrc = audioCtx.createBufferSource();
+            sparkleSrc.buffer = sparkleBuf; sparkleSrc.loop = true;
+            const sparkleFilt = audioCtx.createBiquadFilter();
+            sparkleFilt.type = 'bandpass';
+            sparkleFilt.frequency.value = 4500;
+            sparkleFilt.Q.value = 1.2;
+            const sparkleGain = audioCtx.createGain();
+            sparkleGain.gain.value = 0.04;
+            sparkleSrc.connect(sparkleFilt); sparkleFilt.connect(sparkleGain); sparkleGain.connect(masterGain);
+
+            // ─── KATMAN 3: HAFİF DERİN UĞULTU (alt-bas, doluluk hissi) ───
+            const lowOsc = audioCtx.createOscillator();
+            const lowGain = audioCtx.createGain();
+            lowOsc.type = 'sine';
+            lowOsc.frequency.value = 80 + _themeIdx * 8; // tema göre küçük varyasyon
+            lowGain.gain.value = 0.05;
+            lowOsc.connect(lowGain); lowGain.connect(masterGain);
+
+            // Ana gain
+            const g = audioCtx.createGain();
+            g.gain.setValueAtTime(0, audioCtx.currentTime);
+            g.gain.linearRampToValueAtTime(0.32, audioCtx.currentTime + 0.12);
+            src.connect(filt); filt.connect(g); g.connect(masterGain);
+
+            src.start();
+            sparkleSrc.start();
+            lowOsc.start();
+
+            // Eğim/şiddete göre dinamik
+            const setIntensity = function(intensity) {
+                if (!g) return;
+                // Ana gürültü
+                const targetGain = 0.18 + intensity * 0.28;
+                g.gain.linearRampToValueAtTime(targetGain, audioCtx.currentTime + 0.05);
+                // Filtre yüksek-frekansını eğime göre aç (akış hızlanmış hissi)
+                const filtTarget = baseFreq + intensity * 800;
+                filt.frequency.linearRampToValueAtTime(filtTarget, audioCtx.currentTime + 0.08);
+                // Pırıltı katmanı şiddetle artar
+                sparkleGain.gain.linearRampToValueAtTime(0.02 + intensity * 0.06, audioCtx.currentTime + 0.08);
+            };
+
+            pourNoiseNode = {
+                src, g, filt, sparkleSrc, sparkleGain, lowOsc, lowGain, setIntensity
+            };
+        }
+
+        function stopPourSound() {
+            if (!pourNoiseNode) return;
+            try {
+                const t = audioCtx.currentTime;
+                pourNoiseNode.g.gain.linearRampToValueAtTime(0, t + 0.25);
+                pourNoiseNode.sparkleGain.gain.linearRampToValueAtTime(0, t + 0.25);
+                pourNoiseNode.lowGain.gain.linearRampToValueAtTime(0, t + 0.25);
+                pourNoiseNode.src.stop(t + 0.3);
+                pourNoiseNode.sparkleSrc.stop(t + 0.3);
+                pourNoiseNode.lowOsc.stop(t + 0.3);
+            } catch(e) {}
+            pourNoiseNode = null;
+        }
+
+        // ════════════════════════════════════════════════════════
+        //  YENİ EKLENEN SES EFEKTLERİ
+        // ════════════════════════════════════════════════════════
+
+        // Yere düşen damla sesi (tok "plob")
+        function playDropLost() {
+            if (!audioCtx || !gameState.soundEnabled) return;
+            const t = audioCtx.currentTime;
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            const filt = audioCtx.createBiquadFilter();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(180, t);
+            osc.frequency.exponentialRampToValueAtTime(60, t + 0.06);
+            filt.type = 'lowpass';
+            filt.frequency.value = 600;
+            gain.gain.setValueAtTime(0, t);
+            gain.gain.linearRampToValueAtTime(0.22, t + 0.005);
+            gain.gain.exponentialRampToValueAtTime(0.001, t + 0.1);
+            osc.connect(filt); filt.connect(gain); gain.connect(masterGain);
+            osc.start(t); osc.stop(t + 0.12);
+        }
+
+        // Bardak eğilirken cam sürtünme sesi (sürekli, hafif)
+        let tiltNoiseNode = null;
+        function startTiltSound() {
+            if (!audioCtx || !gameState.soundEnabled || tiltNoiseNode) return;
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            const filt = audioCtx.createBiquadFilter();
+            osc.type = 'sawtooth';
+            osc.frequency.value = 60;
+            filt.type = 'lowpass';
+            filt.frequency.value = 200;
+            filt.Q.value = 4;
+            gain.gain.setValueAtTime(0, audioCtx.currentTime);
+            gain.gain.linearRampToValueAtTime(0.04, audioCtx.currentTime + 0.05);
+            osc.connect(filt); filt.connect(gain); gain.connect(masterGain);
+            osc.start();
+            tiltNoiseNode = { osc, gain, filt };
+        }
+        function setTiltIntensity(intensity) {
+            // intensity: 0-1 (0=dik, 1=tam yatay)
+            if (!tiltNoiseNode) return;
+            const t = audioCtx.currentTime;
+            tiltNoiseNode.osc.frequency.linearRampToValueAtTime(60 + intensity * 140, t + 0.05);
+            tiltNoiseNode.gain.gain.linearRampToValueAtTime(0.01 + intensity * 0.06, t + 0.05);
+            tiltNoiseNode.filt.frequency.linearRampToValueAtTime(200 + intensity * 400, t + 0.05);
+        }
+        function stopTiltSound() {
+            if (!tiltNoiseNode) return;
+            try {
+                tiltNoiseNode.gain.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.15);
+                tiltNoiseNode.osc.stop(audioCtx.currentTime + 0.2);
+            } catch(e) {}
+            tiltNoiseNode = null;
+        }
+
+        // Kalp atışı (sıvı bitmek üzereyken)
+        let heartbeatTimer = 0;
+        function playHeartbeat(rate) {
+            // rate: 1.0 normal, 2.0 ikiye katlanmış hız
+            if (!audioCtx || !gameState.soundEnabled) return;
+            const t = audioCtx.currentTime;
+
+            // İlk vuruş (lub)
+            const o1 = audioCtx.createOscillator();
+            const g1 = audioCtx.createGain();
+            o1.type = 'sine';
+            o1.frequency.setValueAtTime(70, t);
+            o1.frequency.exponentialRampToValueAtTime(40, t + 0.08);
+            g1.gain.setValueAtTime(0, t);
+            g1.gain.linearRampToValueAtTime(0.45, t + 0.01);
+            g1.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
+            o1.connect(g1); g1.connect(masterGain);
+            o1.start(t); o1.stop(t + 0.14);
+
+            // İkinci vuruş (dub)
+            const o2 = audioCtx.createOscillator();
+            const g2 = audioCtx.createGain();
+            o2.type = 'sine';
+            o2.frequency.setValueAtTime(60, t + 0.18);
+            o2.frequency.exponentialRampToValueAtTime(35, t + 0.26);
+            g2.gain.setValueAtTime(0, t + 0.18);
+            g2.gain.linearRampToValueAtTime(0.32, t + 0.19);
+            g2.gain.exponentialRampToValueAtTime(0.001, t + 0.28);
+            o2.connect(g2); g2.connect(masterGain);
+            o2.start(t + 0.18); o2.stop(t + 0.3);
+        }
+
+        // Doluluk yaklaşma sesi (alt bardak %85+ olunca gerilim tonu)
+        let fillNearNode = null;
+        function startFillNearSound() {
+            if (!audioCtx || !gameState.soundEnabled || fillNearNode) return;
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = 'sine';
+            osc.frequency.value = 880; // A5
+            gain.gain.setValueAtTime(0, audioCtx.currentTime);
+            gain.gain.linearRampToValueAtTime(0.06, audioCtx.currentTime + 0.1);
+            // Hafif tremolo (vibrato hissi)
+            const lfo = audioCtx.createOscillator();
+            const lfoGain = audioCtx.createGain();
+            lfo.frequency.value = 6;
+            lfoGain.gain.value = 0.025;
+            lfo.connect(lfoGain); lfoGain.connect(gain.gain);
+            osc.connect(gain); gain.connect(masterGain);
+            osc.start(); lfo.start();
+            fillNearNode = { osc, gain, lfo };
+        }
+        function stopFillNearSound() {
+            if (!fillNearNode) return;
+            try {
+                fillNearNode.gain.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.2);
+                fillNearNode.osc.stop(audioCtx.currentTime + 0.25);
+                fillNearNode.lfo.stop(audioCtx.currentTime + 0.25);
+            } catch(e) {}
+            fillNearNode = null;
+        }
+
+        // ════════════════════════════════════════════════════════
+        //  GENERATİF AMBIENT MÜZİK (her temaya uygun atmosfer)
+        // ════════════════════════════════════════════════════════
+        let musicNode = null;
+        let musicNoteTimer = 0;
+        let musicCurrentTheme = -1;
+
+        // Tema-spesifik nota seti (pentatonik scale'ler)
+        const themeMusic = [
+            { scale: [261.63, 293.66, 329.63, 392.00, 440.00], wave: 'sine',     filter: 1200 }, // Su: C major pentatonik
+            { scale: [220.00, 246.94, 277.18, 329.63, 369.99], wave: 'triangle', filter: 700  }, // Lav: A minor pentatonik (karanlık)
+            { scale: [293.66, 329.63, 369.99, 440.00, 493.88], wave: 'sine',     filter: 1500 }, // Zehir: D major pentatonik (tedirgin)
+            { scale: [349.23, 392.00, 440.00, 523.25, 587.33], wave: 'triangle', filter: 1100 }, // Altın: F major pentatonik (parlak)
+            { scale: [196.00, 220.00, 246.94, 293.66, 329.63], wave: 'triangle', filter: 600  }, // Kan: G minor pentatonik (kasvetli)
+            { scale: [277.18, 311.13, 349.23, 415.30, 466.16], wave: 'sine',     filter: 1300 }, // Gece: C# minor pentatonik (büyülü)
+        ];
+
+        function startMusic() {
+            if (!audioCtx || !gameState.musicEnabled || musicNode) return;
+            // Generic master gain for music
+            const mGain = audioCtx.createGain();
+            mGain.gain.value = 0; // başta sessiz
+            mGain.gain.linearRampToValueAtTime(0.18, audioCtx.currentTime + 1.5);
+            mGain.connect(masterGain);
+            musicNode = { mGain, lastNoteTime: 0 };
+        }
+
+        function stopMusic() {
+            if (!musicNode) return;
+            try {
+                musicNode.mGain.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.5);
+            } catch(e) {}
+            setTimeout(() => { musicNode = null; }, 600);
+        }
+
+        function tickMusic() {
+            if (!musicNode || !audioCtx || !gameState.musicEnabled) return;
+            const now = audioCtx.currentTime;
+            // Her 1.6 saniyede bir nota çal
+            if (now - musicNode.lastNoteTime < 1.6 + Math.random() * 0.6) return;
+            musicNode.lastNoteTime = now;
+
+            let themeIdx = Math.floor((gameState.level - 1) / 5) % themes.length;
+            let m = themeMusic[themeIdx];
+            let freq = m.scale[Math.floor(Math.random() * m.scale.length)];
+            // Bazen bir oktav yukarı veya aşağı
+            if (Math.random() < 0.3) freq *= 2;
+            else if (Math.random() < 0.2) freq *= 0.5;
+
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            const filt = audioCtx.createBiquadFilter();
+            osc.type = m.wave;
+            osc.frequency.value = freq;
+            filt.type = 'lowpass';
+            filt.frequency.value = m.filter;
+            filt.Q.value = 0.6;
+
+            // Yumuşak attack/release (ambient hissi)
+            gain.gain.setValueAtTime(0, now);
+            gain.gain.linearRampToValueAtTime(0.7, now + 0.4);
+            gain.gain.linearRampToValueAtTime(0, now + 2.8);
+            osc.connect(filt); filt.connect(gain); gain.connect(musicNode.mGain);
+            osc.start(now); osc.stop(now + 3.0);
+        }
+
+        // Sıçrama sesi
+        function playSplash() {
+            if (!audioCtx || !gameState.soundEnabled) return;
+            const t = audioCtx.currentTime;
+            
+            // Bloop (suya damla)
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            const filt = audioCtx.createBiquadFilter();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(520, t);
+            osc.frequency.exponentialRampToValueAtTime(220, t + 0.08);
+            filt.type = 'lowpass';
+            filt.frequency.value = 1200;
+            filt.Q.value = 2;
+            gain.gain.setValueAtTime(0, t);
+            gain.gain.linearRampToValueAtTime(0.28, t + 0.005);
+            gain.gain.exponentialRampToValueAtTime(0.001, t + 0.13);
+            osc.connect(filt); filt.connect(gain); gain.connect(masterGain);
+            osc.start(t); osc.stop(t + 0.14);
+            
+            // Kısa filtreli noise (damla doku)
+            const noiseBuf = audioCtx.createBuffer(1, audioCtx.sampleRate * 0.06, audioCtx.sampleRate);
+            const noiseData = noiseBuf.getChannelData(0);
+            for (let i = 0; i < noiseData.length; i++) {
+                noiseData[i] = (Math.random() * 2 - 1) * Math.exp(-i / (noiseData.length * 0.3));
+            }
+            const noiseSrc = audioCtx.createBufferSource();
+            const noiseGain = audioCtx.createGain();
+            const noiseFilt = audioCtx.createBiquadFilter();
+            noiseSrc.buffer = noiseBuf;
+            noiseFilt.type = 'bandpass';
+            noiseFilt.frequency.value = 900;
+            noiseFilt.Q.value = 1.5;
+            noiseGain.gain.setValueAtTime(0.18, t);
+            noiseGain.gain.exponentialRampToValueAtTime(0.001, t + 0.07);
+            noiseSrc.connect(noiseFilt); noiseFilt.connect(noiseGain); noiseGain.connect(masterGain);
+            noiseSrc.start(t); noiseSrc.stop(t + 0.08);
+        }
+
+        // Kombo sesi — artan tonlar
+        function playComboSound(level) {
+            if (!audioCtx || !gameState.soundEnabled) return;
+            const t = audioCtx.currentTime;
+            
+            // C major pentatonik yükselen — her vuruşta bir nota daha yukarı
+            // C4, E4, G4, C5, E5 — her seferinde daha tatmin edici
+            const baseFreqs = [261.63, 329.63, 392.00, 523.25, 659.25];
+            const subFreqs  = [130.81, 164.81, 196.00, 261.63, 329.63];  // bir oktav alt
+            const count = Math.min(level, baseFreqs.length);
+            
+            for (let i = 0; i < count; i++) {
+                const startT = t + i * 0.09;
+                
+                // Tok bas tabanı
+                const sub = audioCtx.createOscillator();
+                const subGain = audioCtx.createGain();
+                const subFilt = audioCtx.createBiquadFilter();
+                sub.type = 'sine';
+                sub.frequency.setValueAtTime(subFreqs[i] * 1.4, startT);
+                sub.frequency.exponentialRampToValueAtTime(subFreqs[i], startT + 0.1);
+                subFilt.type = 'lowpass';
+                subFilt.frequency.value = 600;
+                subGain.gain.setValueAtTime(0, startT);
+                subGain.gain.linearRampToValueAtTime(0.32, startT + 0.005);
+                subGain.gain.exponentialRampToValueAtTime(0.001, startT + 0.3);
+                sub.connect(subFilt); subFilt.connect(subGain); subGain.connect(masterGain);
+                sub.start(startT); sub.stop(startT + 0.32);
+                
+                // Üst canlı melodi notası
+                const top = audioCtx.createOscillator();
+                const topGain = audioCtx.createGain();
+                const topFilt = audioCtx.createBiquadFilter();
+                top.type = 'triangle';
+                top.frequency.value = baseFreqs[i];
+                topFilt.type = 'lowpass';
+                topFilt.frequency.value = 2800;
+                topGain.gain.setValueAtTime(0, startT);
+                topGain.gain.linearRampToValueAtTime(0.28, startT + 0.008);
+                topGain.gain.exponentialRampToValueAtTime(0.001, startT + 0.4);
+                top.connect(topFilt); topFilt.connect(topGain); topGain.connect(masterGain);
+                top.start(startT); top.stop(startT + 0.42);
+                
+                // Son vuruşa uzun gövde tail (kombo doruk hissi)
+                if (i === count - 1) {
+                    const body = audioCtx.createOscillator();
+                    const bodyGain = audioCtx.createGain();
+                    const bodyFilt = audioCtx.createBiquadFilter();
+                    body.type = 'sine';
+                    body.frequency.value = baseFreqs[i] * 1.5;  // 5'li üst harmoni
+                    bodyFilt.type = 'lowpass';
+                    bodyFilt.frequency.value = 2000;
+                    bodyGain.gain.setValueAtTime(0, startT);
+                    bodyGain.gain.linearRampToValueAtTime(0.14, startT + 0.05);
+                    bodyGain.gain.exponentialRampToValueAtTime(0.001, startT + 1.0);
+                    body.connect(bodyFilt); bodyFilt.connect(bodyGain); bodyGain.connect(masterGain);
+                    body.start(startT); body.stop(startT + 1.05);
+                }
+            }
+        }
+
+        // Oyun bitti sesi — inen tonlar
+        function playGameOverSound() {
+            if (!audioCtx || !gameState.soundEnabled) return;
+            const freqs = [523, 466, 392, 311];
+            freqs.forEach((f, i) => {
+                const t = audioCtx.currentTime + i * 0.25;
+                
+                const playTone = (freq, time, gainMult) => {
+                    const osc = audioCtx.createOscillator();
+                    const g = audioCtx.createGain();
+                    const lp = audioCtx.createBiquadFilter();
+                    lp.type = 'lowpass'; lp.frequency.value = 2000;
+                    
+                    const lfo = audioCtx.createOscillator();
+                    const lfoGain = audioCtx.createGain();
+                    lfo.type = 'sine'; lfo.frequency.value = 5;
+                    lfoGain.gain.value = freq * 0.0017;
+                    lfo.connect(lfoGain); lfoGain.connect(osc.detune);
+                    
+                    osc.type = 'triangle'; osc.frequency.value = freq;
+                    
+                    osc.connect(lp); lp.connect(g); g.connect(masterGain);
+                    
+                    g.gain.setValueAtTime(0, time);
+                    g.gain.linearRampToValueAtTime(0.15 * gainMult, time + 0.03);
+                    g.gain.exponentialRampToValueAtTime(0.001, time + 0.4);
+                    
+                    osc.start(time); lfo.start(time);
+                    osc.stop(time + 0.42); lfo.stop(time + 0.42);
+                };
+                
+                playTone(f, t, 1);
+                
+                if (i === freqs.length - 1) {
+                    playTone(f, t + 0.2, 0.4);
+                }
+            });
+        }
+
+        // Level up fanfare (Tatmin edici kristal çınlaması)
+        function playLevelUpSound() {
+            if (!audioCtx || !gameState.soundEnabled) return;
+            const t = audioCtx.currentTime;
+            
+            // ═══ KATMAN 1: Tok bas vuruş ═══
+            const sub = audioCtx.createOscillator();
+            const subGain = audioCtx.createGain();
+            const subFilt = audioCtx.createBiquadFilter();
+            sub.type = 'sine';
+            sub.frequency.setValueAtTime(165, t);
+            sub.frequency.exponentialRampToValueAtTime(82, t + 0.15);
+            subFilt.type = 'lowpass';
+            subFilt.frequency.value = 500;
+            subGain.gain.setValueAtTime(0, t);
+            subGain.gain.linearRampToValueAtTime(0.55, t + 0.008);
+            subGain.gain.exponentialRampToValueAtTime(0.001, t + 0.4);
+            sub.connect(subFilt); subFilt.connect(subGain); subGain.connect(masterGain);
+            sub.start(t); sub.stop(t + 0.45);
+            
+            // ═══ KATMAN 2: Yükselen majör arpej (canlı, başarı hissi) ═══
+            // C major arpej: C4 → E4 → G4 → C5 hızlı çıkış
+            const arpFreqs = [261.63, 329.63, 392.00, 523.25];  // C4 E4 G4 C5
+            arpFreqs.forEach((freq, i) => {
+                const startT = t + i * 0.05;  // hızlı arpej
+                
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                const filt = audioCtx.createBiquadFilter();
+                
+                osc.type = 'triangle';
+                osc.frequency.value = freq;
+                
+                filt.type = 'lowpass';
+                filt.frequency.value = 3000;
+                filt.Q.value = 0.7;
+                
+                const peakGain = 0.30 - i * 0.03;  // ilk notalar daha yüksek
+                gain.gain.setValueAtTime(0, startT);
+                gain.gain.linearRampToValueAtTime(peakGain, startT + 0.01);
+                gain.gain.exponentialRampToValueAtTime(0.001, startT + 0.7);
+                
+                osc.connect(filt); filt.connect(gain); gain.connect(masterGain);
+                osc.start(startT); osc.stop(startT + 0.75);
+            });
+            
+            // ═══ KATMAN 3: Sustained C major akor gövde (oda dolum) ═══
+            // C major triad pad — tüm notalar aynı anda, uzun yumuşak tail
+            const padFreqs = [261.63, 329.63, 392.00];  // C4 E4 G4
+            padFreqs.forEach(freq => {
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                const filt = audioCtx.createBiquadFilter();
+                
+                osc.type = 'sine';
+                osc.frequency.value = freq;
+                
+                filt.type = 'lowpass';
+                filt.frequency.value = 1800;
+                
+                gain.gain.setValueAtTime(0, t);
+                gain.gain.linearRampToValueAtTime(0.10, t + 0.15);  // yumuşak giriş
+                gain.gain.linearRampToValueAtTime(0.08, t + 0.6);
+                gain.gain.exponentialRampToValueAtTime(0.001, t + 1.4);
+                
+                osc.connect(filt); filt.connect(gain); gain.connect(masterGain);
+                osc.start(t); osc.stop(t + 1.5);
+            });
+        }
+
+        // Adım 4: Tur Atlama (Level Up)
+        function levelUp() {
+            gameState.isTransitioning = true;
+            stopPourSound();
+
+            // === GÜÇLENDİRİLMİŞ PUAN SİSTEMİ ===
+            let fillPct = targetCup.fill;
+            let elapsed = (Date.now() - levelStartTime) / 1000;
+            let baseScore = 100 + gameState.level * 25;
+            let fillBonus = Math.round((fillPct / 100) * 150);
+            let timeBonus = elapsed < 4 ? 100 : elapsed < 7 ? 50 : 0;
+            // Mükemmel doluluk için bonus
+            let perfectBonus = fillPct >= 98 ? 200 : 0;
+
+            // Kombo: 88%+ doluluk
+            let prevCombo = comboCount;
+            if (fillPct >= 88) {
+                comboCount++;
+            } else {
+                if (comboCount >= 2) {
+                    // Combo BREAK — popup
+                    comboPopups.push({
+                        text: 'MISS!',
+                        subtext: prevCombo + ' COMBO BROKE',
+                        color: [220, 80, 80],
+                        timer: 90, scale: 1.0, vy: -1
+                    });
+                }
+                comboCount = 0;
+            }
+            // Yeni multiplier: 1, 1.5, 2, 3, 4
+            comboMultiplier = comboCount >= 10 ? 4 : comboCount >= 5 ? 3 : comboCount >= 3 ? 2 : comboCount >= 2 ? 1.5 : 1;
+
+            // Combo popup tetikle
+            if (comboCount >= 2 && comboCount > prevCombo) {
+                let cText, cColor, cIcon;
+                if (comboCount >= 10) { cText = 'ON FIRE!'; cColor = [255, 60, 60]; cIcon = '🔥🔥'; }
+                else if (comboCount >= 5) { cText = 'PERFECT!'; cColor = [255, 80, 80]; cIcon = '🔥'; }
+                else if (comboCount >= 3) { cText = 'GREAT!'; cColor = [255, 160, 20]; cIcon = '⚡'; }
+                else { cText = 'GOOD!'; cColor = [255, 215, 0]; cIcon = '✨'; }
+                comboPopups.push({
+                    text: cIcon + ' ' + cText,
+                    subtext: 'x' + comboMultiplier + ' COMBO',
+                    color: cColor,
+                    timer: 100, scale: 1.0, vy: -1.5
+                });
+            }
+
+            let turnScore = Math.round((baseScore + fillBonus + timeBonus + perfectBonus) * comboMultiplier);
+            gameState.score += turnScore;
+            // Skor zıplama animasyonu için
+            window.scorePulse = 1.4;
+
+            // Tema değişimi tespiti
+            let oldThemeIdx = Math.floor((gameState.level - 1) / 5) % themes.length;
+            gameState.level++;
+            let newThemeIdx = Math.floor((gameState.level - 1) / 5) % themes.length;
+
+            if (oldThemeIdx !== newThemeIdx) {
+                // Yeni tema → flash + isim
+                themeFlashTimer = 60; // 60 frame ekran beyaz hafif yansıması
+                themeAnnounceTimer = 120; // 2 saniye tema ismi göster
+                themeAnnounceData = {
+                    name: themes[newThemeIdx].name,
+                    icon: themes[newThemeIdx].icon
+                };
+            }
+
+            // 1. TİTREŞİM
+            if (navigator.vibrate) navigator.vibrate([30, 20, 30]);
+
+            // 2. BARDAK PULSE ANİMASYONU
+            targetCup.scale = 1.15;
+
+            // 3. SES
+            if (comboCount >= 2) playComboSound(comboCount);
+            else playLevelUpSound();
+
+            // 4. BAŞARIM + GÖREV KONTROLÜ
+            checkAchievements('level_complete', { fillPct });
+            updateMissions('level_complete', {});
+            if (elapsed < 5)  updateMissions('speed_level', {});
+            if (gameState.totalLiquid >= 60) { saverTurns++; updateMissions('saver_level', {}); }
+            else saverTurns = 0;
+            levelStartTime = Date.now();
+
+            let lq = currentTheme.liquid;
+            // 5. IŞIK PATLAMASI — POOL
+            for(let i=0; i<6; i++) {
+                let _b = particlePool.getBurst();
+                _b.x = targetCup.x + (Math.random() - 0.5) * targetCup.w * 0.8;
+                _b.y = targetCup.y - targetCup.h/2 + 10;
+                _b.vy = -15 - Math.random() * 15;
+                _b.h = 50 + Math.random() * 50;
+                _b.alpha = 1.0;
+                _b.color = [lq[0], lq[1], lq[2]];
+                burstLines.push(_b);
+            }
+
+            // 6. PARÇACIKLAR — POOL
+            for(let i=0; i<15; i++) {
+                let _e = particlePool.getExplosion();
+                _e.x = targetCup.x + (Math.random() - 0.5) * 20;
+                _e.y = targetCup.y - targetCup.h/2 + 10;
+                _e.vx = (Math.random() - 0.5) * 8;
+                _e.vy = -4 - Math.random() * 6;
+                _e.alpha = 1.0;
+                _e.r = 3 + Math.random() * 3;
+                _e.color = [lq[0], lq[1], lq[2]];
+                explosionParticles.push(_e);
+            }
+
+            // 7. +SKOR YAZISI (puan + kombo göster) — POOL
+            let scoreLabel = '+' + turnScore;
+            if (comboMultiplier > 1) scoreLabel += '  x' + comboMultiplier;
+            let _ft = particlePool.getFloat();
+            _ft.text = scoreLabel;
+            _ft.x = targetCup.x;
+            _ft.y = targetCup.y - targetCup.h/2 - 20;
+            _ft.alpha = 1.0;
+            floatingTexts.push(_ft);
+
+            // Kamerayı alt bardağa doğru kaydır (180px)
+            targetCameraY = -180;
+
+            // 800ms bekleyip yeni tura geçiyoruz (böylece doluluk anı kısaca görünüyor)
+            setTimeout(() => {
+                isDragging = false; // Farenin takılı kalmasını önle
+                cameraY = 0;
+                targetCameraY = 0;
+                
+                // Eski alt bardak, yeni üst bardak oluyor (yatay konumu korunur)
+                topCup.x = targetCup.x;
+                topCup.angle = 0;
+                // GDD: Bir sonraki turun başlangıcı = o ana kadar kalan toplam sıvı
+                topCup.fill = Math.round(gameState.totalLiquid);
+                streamParticles.length = 0; // Ekrandaki kalan damlaları temizle
+                splashParticles.length = 0;
+                ripples.length = 0;
+                if (window.streamDrops) window.streamDrops.length = 0;
+
+                initLevel(); // Yeni bardak konumları ve zorluk
+                gameState.isTransitioning = false;
+            }, 800);
+        }
+
+        // Tur başlangıç ayarları
+        function initLevel() {
+            topCup.angle = 0;
+            
+            // Zorluk Sistemi: Üst bardak bulunduğun seviyeyi temsil eder
+            let shrinkW_top = (gameState.level - 1) * 1.0; // Eskiden 2.0 idi, yarı yarıya yavaş küçülecek
+            let shrinkH_top = (gameState.level - 1) * 1.25; // Eskiden 2.5 idi
+            topCup.w = Math.max(35, 90 - shrinkW_top); 
+            topCup.h = Math.max(45, 110 - shrinkH_top);
+
+            // Alt bardak ise hedefi temsil eder (bir sonraki seviye, yani daha küçük)
+            let shrinkW_target = gameState.level * 1.0;
+            let shrinkH_target = gameState.level * 1.25;
+            targetCup.w = Math.max(35, 90 - shrinkW_target); 
+            targetCup.h = Math.max(45, 110 - shrinkH_target);
+
+            // === BARDAK ŞEKLİ — TEMAYA BAĞLI (her 5 levelde tema değişir) ===
+            // Tema değişince bardak şekli de değişir, görsel olarak temayla uyumlu olur.
+            // Önemli: w (çarpışma alanı) değişmiyor, sadece topW/botW (görsel) değişiyor.
+            let topThemeIdx = Math.floor((gameState.level - 1) / 5) % themes.length;
+            let targetThemeIdx = Math.floor(gameState.level / 5) % themes.length;
+
+            let topNewShape = themes[topThemeIdx].shape || 'normal';
+            let targetNewShape = themes[targetThemeIdx].shape || 'normal';
+
+            if (targetNewShape !== (targetCup.shape || 'normal') && gameState.level > 1) {
+                const shapeNames = { normal: 'Trapez', cylinder: 'Silindir', wide: 'Geniş', reverse: 'Ters Trapez', honey: 'Bal Küpü', goblet: 'Kadeh', flask: 'Şişe', volcano: 'Kâse', mystic: 'Kristal' };
+                let tName = shapeNames[targetNewShape] || 'Yeni';
+                toastQueue.push({ icon: '🏺', name: 'YENİ BARDAK!', desc: tName + ' şekli aktif', timer: 200 });
+            }
+
+            topCup.shape = topNewShape;
+            targetCup.shape = targetNewShape;
+
+            // Hareket hızı: Çok daha yavaş ve dengeli artış
+            if (gameState.level === 1) {
+                targetCup.maxSpeed = 0;
+                targetCup.speed = 0;
+            } else if (gameState.level <= 5) {
+                targetCup.maxSpeed = (gameState.level - 1) * 0.08;
+                targetCup.speed = targetCup.maxSpeed * 0.33;
+            } else {
+                // Seviye 5'ten sonra eskisi gibi 0.25 fırlamak yerine sadece 0.08 artar
+                targetCup.maxSpeed = 0.32 + (gameState.level - 5) * 0.08;
+                targetCup.speed = targetCup.maxSpeed * 0.33;
+            }
+            
+            // GDD: Üst bardaktan 180px aşağıda
+            targetCup.y = topCup.y + 180;
+            
+            // GDD: Sağda veya solda (rastgele)
+            let side = Math.random() < 0.5 ? -1 : 1;
+            
+            // Doldurma açısı (fizik) göz önüne alınarak hesaplanan KUSURSUZ aralık
+            // İlk damla dik açıyla dökülür (w/2)
+            let firstDropX = targetCup.w / 2;
+            // Son damla yaklaşık 68-75 derece eğimde dökülür. (30px yatay düşüş hızı payı)
+            let lastDropX = (targetCup.w / 2) * 0.37 + (targetCup.h / 2) * 0.92 + 30;
+            
+            let minOffsetX = lastDropX - targetCup.w / 2 + 8; // +8 güvenli bölge
+            let maxOffsetX = firstDropX + targetCup.w / 2 - 8;
+            
+            if (maxOffsetX < minOffsetX) {
+                let ideal = (minOffsetX + maxOffsetX) / 2;
+                minOffsetX = ideal;
+                maxOffsetX = ideal;
+            }
+            
+            let offsetX = minOffsetX + Math.random() * (maxOffsetX - minOffsetX);
+            let newX = topCup.x + (side * offsetX);
+            
+            // Şekil flask ise dipte 1.15x genişlik var, duvar payı için bunu hesaba kat
+            let visualHalfW = targetCup.w / 2;
+            if (targetCup.shape === 'flask') visualHalfW *= 1.15;
+            if (newX - visualHalfW < 10 || newX + visualHalfW > canvas.width - 10) {
+                side = side * -1;
+                newX = topCup.x + (side * offsetX);
+            }
+            let halfW = targetCup.w / 2; // çarpışma için sabit halfW
+            targetCup.x = clamp(newX, visualHalfW + 10, canvas.width - visualHalfW - 10);
+            targetCup.dir = side; // Hareket yönü
+            
+            targetCup.fill = 0; 
+        }
+
+        // Oyunu başlat
+        initLevel();
+
+        let isDragging = false;
+        let startX = 0;
+        let targetAngle = 0;
+
+        function clamp(val, min, max) {
+            return Math.max(min, Math.min(max, val));
+        }
+
+        // Ortak Kontroller
+        window.addEventListener('mousedown', (e) => handlePointerDown(e), { passive: false });
+        window.addEventListener('touchstart', (e) => handlePointerDown(e), { passive: false });
+        
+        function handlePointerDown(e) {
+            initAudio(); // İlk dokunuşta sesi başlat (Browser policy bypass)
+            let pos = getPointerPos(e);
+            if (gameState.state === 'MENU') {
+                if (isInsideRect(pos.x, pos.y, btnPlay)) {
+                    gameState.state = 'PLAYING';
+                    gameState.level = 1;
+                    gameState.score = 0;
+                    gameState.totalLiquid = 100;
+                    topCup.fill = 100;
+                    tutorialTimer = 220;
+                    levelStartTime = Date.now();
+                    perfectStreak = 0;
+                    seenThemes = new Set();
+                    initLevel();
+                }
+                if (isInsideCircle(pos.x, pos.y, btnSound)) {
+                    gameState.soundEnabled = !gameState.soundEnabled;
+                }
+                return;
+            }
+            if (gameState.state === 'GAMEOVER') {
+                // "Devam Et" rewarded reklam butonu
+                if (!adSystem.continueUsed && isInsideRect(pos.x, pos.y, btnContinue)) {
+                    adSystem.showRewarded(
+                        () => { // Ödül: +%20 sıvı ile devam
+                            let bonus = Math.min(100, gameState.totalLiquid + 20);
+                            gameState.totalLiquid = bonus;
+                            topCup.fill = bonus;
+                            gameState.state = 'PLAYING';
+                            initLevel();
+                        },
+                        () => { /* Atlandı */ }
+                    );
+                    return;
+                }
+                if (isInsideRect(pos.x, pos.y, btnReplay)) {
+                    gameState.state = 'PLAYING';
+                    gameState.level = 1;
+                    gameState.score = 0;
+                    gameState.totalLiquid = 100;
+                    gameState.isNewHighScore = false;
+                    topCup.fill = 100;
+                    targetCup.fill = 0;
+                    targetCup.waveImpact = 0;
+                    tutorialTimer = 220;
+                    adSystem.reset();
+                    streamParticles.length = 0;
+                    splashParticles.length = 0;
+                    ripples.length = 0;
+                    if (window.streamDrops) window.streamDrops.length = 0;
+                    perfectStreak = 0;
+                    seenThemes = new Set();
+                    comboCount = 0;
+                    comboMultiplier = 1;
+                    saverTurns = 0;
+                    levelStartTime = Date.now();
+                    currentTheme.bgInner = [...themes[0].bgInner];
+                    currentTheme.bgOuter = [...themes[0].bgOuter];
+                    currentTheme.liquid = [...themes[0].liquid];
+                    lastThemeIndex = 0;
+                    themeRings.length = 0;
+                    burstLines.length = 0;
+                    explosionParticles.length = 0;
+                    floatingTexts.length = 0;
+                    if (typeof comboPopups !== 'undefined') comboPopups.length = 0;
+                    initLevel();
+                } else if (isInsideRect(pos.x, pos.y, btnGameOverMenu)) {
+                    gameState.state = 'MENU';
+                    gameState.level = 1;
+                    gameState.score = 0;
+                    gameState.isNewHighScore = false;
+                    adSystem.reset();
+                    streamParticles.length = 0;
+                    splashParticles.length = 0;
+                    ripples.length = 0;
+                    if (window.streamDrops) window.streamDrops.length = 0;
+                    perfectStreak = 0;
+                    seenThemes = new Set();
+                    comboCount = 0;
+                    comboMultiplier = 1;
+                    saverTurns = 0;
+                    levelStartTime = Date.now();
+                    currentTheme.bgInner = [...themes[0].bgInner];
+                    currentTheme.bgOuter = [...themes[0].bgOuter];
+                    currentTheme.liquid = [...themes[0].liquid];
+                    lastThemeIndex = 0;
+                    themeRings.length = 0;
+                    burstLines.length = 0;
+                    explosionParticles.length = 0;
+                    floatingTexts.length = 0;
+                    if (typeof comboPopups !== 'undefined') comboPopups.length = 0;
+                }
+                return;
+            }
+            if (gameState.state === 'PAUSED') {
+                if (isInsideRect(pos.x, pos.y, btnResume)) {
+                    gameState.state = 'PLAYING';
+                    return;
+                }
+                if (btnReplayPause && isInsideRect(pos.x, pos.y, btnReplayPause)) {
+                    // Tekrar oyna: level 1'den
+                    gameState.state = 'PLAYING';
+                    gameState.level = 1;
+                    gameState.score = 0;
+                    gameState.totalLiquid = 100;
+                    gameState.isNewHighScore = false;
+                    topCup.fill = 100;
+                    targetCup.fill = 0;
+                    targetCup.waveImpact = 0;
+                    isDragging = false;
+                    adSystem.reset();
+                    streamParticles.length = 0;
+                    splashParticles.length = 0;
+                    ripples.length = 0;
+                    if (window.streamDrops) window.streamDrops.length = 0;
+                    perfectStreak = 0;
+                    seenThemes = new Set();
+                    comboCount = 0;
+                    comboMultiplier = 1;
+                    comboPopups.length = 0;
+                    saverTurns = 0;
+                    levelStartTime = Date.now();
+                    currentTheme.bgInner = [...themes[0].bgInner];
+                    currentTheme.bgOuter = [...themes[0].bgOuter];
+                    currentTheme.liquid = [...themes[0].liquid];
+                    lastThemeIndex = 0;
+                    themeRings.length = 0;
+                    burstLines.length = 0;
+                    explosionParticles.length = 0;
+                    floatingTexts.length = 0;
+                    tutorialTimer = 220;
+                    initLevel();
+                    return;
+                }
+                if (isInsideRect(pos.x, pos.y, btnMainMenu)) {
+                    gameState.state = 'MENU';
+                    gameState.level = 1;
+                    gameState.score = 0;
+                    isDragging = false;
+                    streamParticles.length = 0;
+                    splashParticles.length = 0;
+                    ripples.length = 0;
+                    if (window.streamDrops) window.streamDrops.length = 0;
+                    return;
+                }
+                if (btnSoundToggle && isInsideCircle(pos.x, pos.y, btnSoundToggle)) {
+                    gameState.soundEnabled = !gameState.soundEnabled;
+                    localStorage.setItem('pourDownSound', gameState.soundEnabled);
+                    if (!gameState.soundEnabled) { stopPourSound(); stopTiltSound(); stopFillNearSound(); }
+                    return;
+                }
+                if (btnMusicToggle && isInsideCircle(pos.x, pos.y, btnMusicToggle)) {
+                    gameState.musicEnabled = !gameState.musicEnabled;
+                    localStorage.setItem('pourDownMusic', gameState.musicEnabled);
+                    if (!gameState.musicEnabled) stopMusic();
+                    return;
+                }
+                return;
+            }
+            if (gameState.state === 'PLAYING') {
+                if (isInsideCircle(pos.x, pos.y, btnPause)) {
+                    gameState.state = 'PAUSED';
+                    isDragging = false;
+                    return;
+                }
+                isDragging = true;
+                targetAngle = topCup.angle;
+                startX = pos.x - (targetAngle / 0.6);
+            }
+        }
+
+        window.addEventListener('mousemove', (e) => handlePointerMove(e), { passive: false });
+        window.addEventListener('touchmove', (e) => {
+            if (isDragging && gameState.state === 'PLAYING') e.preventDefault();
+            handlePointerMove(e);
+        }, { passive: false });
+
+        function handlePointerMove(e) {
+            if (!isDragging || gameState.state !== 'PLAYING') return;
+            let pos = getPointerPos(e);
+            let dx = pos.x - startX;
+            targetAngle = clamp(dx * 0.6, -90, 90);
+        }
+
+        window.addEventListener('mouseup', () => { isDragging = false; targetAngle = 0; });
+        window.addEventListener('touchend', () => { isDragging = false; targetAngle = 0; });
+
+        // Bardak çizim fonksiyonu (İki bardak için de kullanılacak)
+        function drawCup(cObj) {
+            ctx.save();
+            ctx.translate(cObj.x, cObj.y);
+            
+            // BARDAK PULSE ANİMASYONU
+            cObj.scale = cObj.scale || 1.0;
+            cObj.scale += (1.0 - cObj.scale) * 0.12; // Lerp ile küçülerek 1.0'a döner
+            if (Math.abs(cObj.scale - 1.0) > 0.005) {
+                ctx.scale(cObj.scale, cObj.scale);
+            }
+
+            if (cObj.angle) ctx.rotate(cObj.angle * Math.PI / 180);
+
+            let w = cObj.w;
+            let h = cObj.h;
+            // === BARDAK ŞEKLİ SİSTEMİ ===
+            let shape = cObj.shape || 'normal';
+            let topW = w / 2; // her zaman sabit — sıvı buraya düşer
+            let botW = topW * 0.85; // varsayılan
+            
+            // === SKIN RENKLERİ VE YANSIMALAR ===
+            let strokeColor = 'rgba(255,255,255,0.7)';
+            let fillBody = 'rgba(255,255,255,0.03)';
+            let glowColor = 'transparent';
+            let strokeW = 2.5;
+            let glassHighlight = 'rgba(255,255,255,0.5)';
+            let shadowColor = 'rgba(0,0,0,0.35)';
+
+            if (shape === 'volcano') { // LAV
+                botW = topW * 0.55;
+                strokeColor = 'rgba(255, 120, 40, 0.9)';
+                fillBody = 'rgba(255, 60, 0, 0.08)';
+                glowColor = 'rgba(255, 80, 0, 0.5)';
+                strokeW = 3;
+                glassHighlight = 'rgba(255,180,100,0.6)';
+            } else if (shape === 'flask') { // ZEHİR
+                botW = topW * 1.15;
+                strokeColor = 'rgba(100, 255, 100, 0.85)';
+                fillBody = 'rgba(0, 255, 50, 0.06)';
+                glowColor = 'rgba(0, 255, 50, 0.4)';
+                glassHighlight = 'rgba(180,255,180,0.6)';
+            } else if (shape === 'goblet') { // ALTIN
+                botW = topW * 0.6; // kase dip genişliği
+                strokeColor = 'rgba(255, 215, 0, 1)';
+                fillBody = 'rgba(255, 200, 0, 0.1)';
+                glowColor = 'rgba(255, 215, 0, 0.4)';
+                strokeW = 3;
+                glassHighlight = 'rgba(255,255,200,0.8)';
+            } else if (shape === 'honey') { // BAL
+                botW = topW * 1.25; // Tombul
+                strokeColor = 'rgba(255, 180, 50, 0.8)'; 
+                fillBody = 'rgba(255, 150, 0, 0.08)';
+                glowColor = 'rgba(255, 150, 0, 0.3)';
+                glassHighlight = 'rgba(255, 200, 100, 0.6)';
+            } else if (shape === 'mystic') { // GECE
+                botW = topW * 0.9;
+                strokeColor = 'rgba(180, 120, 255, 0.9)';
+                fillBody = 'rgba(130, 70, 255, 0.08)';
+                glowColor = 'rgba(150, 80, 255, 0.6)';
+                strokeW = 3;
+                glassHighlight = 'rgba(220,180,255,0.7)';
+            }
+
+            let hh = h / 2;
+            let r = 8;
+
+            // Çekirdek yol fonksiyonu (hem clip hem stroke için)
+            function buildCupPath() {
+                ctx.beginPath();
+                if (shape === 'honey') {
+                    ctx.moveTo(-topW, -hh);
+                    ctx.bezierCurveTo(-topW * 1.5, -hh / 2, -botW, hh, -topW * 0.7, hh);
+                    ctx.lineTo(topW * 0.7, hh);
+                    ctx.bezierCurveTo(botW, hh, topW * 1.5, -hh / 2, topW, -hh);
+                } else if (shape === 'goblet') {
+                    ctx.moveTo(-topW, -hh);
+                    ctx.bezierCurveTo(-topW, 0, -botW, hh - r, -botW + r, hh);
+                    ctx.lineTo(botW - r, hh);
+                    ctx.bezierCurveTo(botW, hh - r, topW, 0, topW, -hh);
+                } else if (shape === 'volcano') {
+                    ctx.moveTo(-topW, -hh);
+                    ctx.lineTo(-botW, hh - 2);
+                    ctx.quadraticCurveTo(0, hh + 4, botW, hh - 2);
+                    ctx.lineTo(topW, -hh);
+                } else if (shape === 'mystic') {
+                    ctx.moveTo(-topW, -hh);
+                    ctx.lineTo(-topW - 8, -hh/2 + 10);
+                    ctx.lineTo(-botW, hh - r);
+                    ctx.quadraticCurveTo(-botW, hh, -botW + r, hh);
+                    ctx.lineTo(botW - r, hh);
+                    ctx.quadraticCurveTo(botW, hh, botW, hh - r);
+                    ctx.lineTo(topW + 8, -hh/2 + 10);
+                    ctx.lineTo(topW, -hh);
+                } else {
+                    ctx.moveTo(-topW, -hh);
+                    ctx.lineTo(-botW, hh - r);
+                    ctx.quadraticCurveTo(-botW, hh, -botW + r, hh);
+                    ctx.lineTo(botW - r, hh);
+                    ctx.quadraticCurveTo(botW, hh, botW, hh - r);
+                    ctx.lineTo(topW, -hh);
+                }
+                ctx.closePath();
+            }
+
+            // 5. BARDAK ALT GÖLGE
+            ctx.fillStyle = shadowColor;
+            ctx.beginPath();
+            let shadowY = (shape === 'goblet') ? hh + 45 : hh + 6;
+            let shadowW = botW * 0.8;
+            if (shape === 'honey') shadowW = topW * 0.8;
+            ctx.ellipse(0, shadowY, shadowW, 5, 0, 0, Math.PI*2);
+            ctx.fill();
+            
+            // Cam gövde arka planı ve Clip Path
+            ctx.save();
+            buildCupPath();
+            
+            if (glowColor !== 'transparent') {
+                ctx.shadowColor = glowColor;
+                ctx.shadowBlur = 15;
+            }
+            ctx.fillStyle = fillBody;
+            ctx.fill();
+            ctx.shadowBlur = 0; // reset
+
+            // Sıvıyı bardak sınırları içine kırp
+            ctx.clip();
+
+            // Eğer içinde sıvı varsa çiz
+            if (cObj.fill > 0) {
+                let fillH = (cObj.fill / 100) * h;
+                let rad = (cObj.angle || 0) * Math.PI / 180;
+                // tan değerini sınırla (90 derecede sonsuza gitmesin)
+                let tanVal = Math.max(-20, Math.min(20, Math.tan(rad)));
+
+                // Matematiksel olarak mükemmel yatay su yüzeyi
+                let leftY = (h/2 - fillH) + tanVal * (w/2);
+                let rightY = (h/2 - fillH) - tanVal * (w/2);
+
+                // BARDAK EĞİLİNCE DALGALANMA ARTAR + DOLUMA ÇARPMA
+                cObj.waveMultiplier = cObj.waveMultiplier || 1;
+                cObj.waveImpact = cObj.waveImpact || 0;
+                cObj.waveImpact *= 0.88; // dalga bozulması zamanla söner
+                let targetWaveMult = 1 + Math.abs(cObj.angle || 0) / 20;
+                cObj.waveMultiplier += (targetWaveMult - cObj.waveMultiplier) * 0.05;
+
+                const time = Date.now() / 1000;
+
+                // ANA SIVI DALGASI (3 Katmanlı Sinüs)
+                ctx.beginPath();
+                for (let px = -w/2; px <= w/2; px += 2) {
+                    let pRatio = (px - (-w/2)) / w;
+                    let baseY = leftY + (rightY - leftY) * pRatio;
+
+                    const wave1 = Math.sin(time * 2.1 + px * 0.05) * 2.5;
+                    const wave2 = Math.sin(time * 3.4 + px * 0.08) * 1.5;
+                    const wave3 = Math.sin(time * 1.7 + px * 0.03) * 1.0;
+                    // waveImpact: çarpma anında sertçe dalgalanır, zamanla söner
+                    const impactWave = Math.sin(time * 12 + px * 0.18) * (cObj.waveImpact || 0);
+                    const totalWave = (wave1 + wave2 + wave3) * cObj.waveMultiplier + impactWave;
+
+                    if (px === -w/2) {
+                        ctx.moveTo(px, baseY + totalWave);
+                    } else {
+                        ctx.lineTo(px, baseY + totalWave);
+                    }
+                }
+                // Dalga altını kapat ve doldur
+                ctx.lineTo(w/2, h/2);
+                ctx.lineTo(-w/2, h/2);
+                ctx.closePath();
+                let lq = currentTheme.liquid.map(Math.round);
+                
+                // Anamenüde veya parlama istendiğinde glow efekti
+                if (cObj.isMenu) {
+                    ctx.save();
+                    ctx.shadowColor = `rgba(${lq[0]}, ${lq[1]}, ${lq[2]}, 0.8)`;
+                    ctx.shadowBlur = 15;
+                    ctx.fillStyle = `rgba(${lq[0]}, ${lq[1]}, ${lq[2]}, 0.8)`;
+                    ctx.fill();
+                    ctx.restore();
+                }
+
+                ctx.fillStyle = `rgba(${lq[0]}, ${lq[1]}, ${lq[2]}, 0.65)`;
+                ctx.fill();
+
+                // DALGA PARILTISI (Beyaz Şeffaf Çizgi)
+                ctx.beginPath();
+                for (let px = -w/2; px <= w/2; px += 2) {
+                    let pRatio = (px - (-w/2)) / w;
+                    let baseY = leftY + (rightY - leftY) * pRatio;
+
+                    const wave1 = Math.sin(time * 2.1 + px * 0.05) * 2.5;
+                    const wave2 = Math.sin(time * 3.4 + px * 0.08) * 1.5;
+                    const wave3 = Math.sin(time * 1.7 + px * 0.03) * 1.0;
+                    const totalWave = (wave1 + wave2 + wave3) * cObj.waveMultiplier;
+
+                    if (px === -w/2) {
+                        ctx.moveTo(px, baseY + totalWave);
+                    } else {
+                        ctx.lineTo(px, baseY + totalWave);
+                    }
+                }
+                
+                // Sağdan sola 3px aşağıda geri dön (kalın şerit)
+                for (let px = w/2; px >= -w/2; px -= 2) {
+                    let pRatio = (px - (-w/2)) / w;
+                    let baseY = leftY + (rightY - leftY) * pRatio;
+
+                    const wave1 = Math.sin(time * 2.1 + px * 0.05) * 2.5;
+                    const wave2 = Math.sin(time * 3.4 + px * 0.08) * 1.5;
+                    const wave3 = Math.sin(time * 1.7 + px * 0.03) * 1.0;
+                    const totalWave = (wave1 + wave2 + wave3) * cObj.waveMultiplier;
+
+                    ctx.lineTo(px, baseY + totalWave + 3);
+                }
+                ctx.closePath();
+                ctx.fillStyle = 'rgba(255,255,255,0.12)';
+                ctx.fill();
+
+                // DALGA PARILTISI (Beyaz Şeffaf Çizgi - En Üst)
+                ctx.beginPath();
+                for (let px = -w/2; px <= w/2; px += 2) {
+                    let pRatio = (px - (-w/2)) / w;
+                    let baseY = leftY + (rightY - leftY) * pRatio;
+
+                    const wave1 = Math.sin(time * 2.1 + px * 0.05) * 2.5;
+                    const wave2 = Math.sin(time * 3.4 + px * 0.08) * 1.5;
+                    const wave3 = Math.sin(time * 1.7 + px * 0.03) * 1.0;
+                    const totalWave = (wave1 + wave2 + wave3) * cObj.waveMultiplier;
+
+                    if (px === -w/2) {
+                        ctx.moveTo(px, baseY + totalWave);
+                    } else {
+                        ctx.lineTo(px, baseY + totalWave);
+                    }
+                }
+                ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+                ctx.lineWidth = 1.5;
+                ctx.stroke();
+            }
+
+            ctx.restore(); // Clip iptal
+
+            // 1. BARDAK ŞEKLİ (Dış Çerçeve)
+            buildCupPath();
+
+            // 4. ALT BARDAK FARK (Dış kalın ana cam kenarı)
+            let baseOpacity = 0.4;
+            if (cObj === targetCup) {
+                baseOpacity = 0.5 + (cObj.fill / 100) * 0.3;
+            }
+            ctx.strokeStyle = strokeColor;
+            ctx.globalAlpha = baseOpacity;
+            ctx.lineWidth = strokeW;
+            ctx.lineCap = 'round';
+            ctx.stroke();
+            ctx.globalAlpha = 1.0;
+
+            // Tema bazlı ayaklık ve süslemeler
+            if (shape === 'goblet') {
+                // Şık taşlı ayaklık
+                ctx.beginPath();
+                ctx.moveTo(-10, hh);
+                ctx.lineTo(10, hh);
+                ctx.lineTo(8, hh + 15);
+                ctx.lineTo(-8, hh + 15);
+                ctx.fillStyle = 'rgba(255, 215, 0, 0.8)';
+                ctx.fill();
+                
+                ctx.beginPath();
+                ctx.moveTo(-8, hh + 15);
+                ctx.quadraticCurveTo(-15, hh + 25, -25, hh + 45);
+                ctx.lineTo(25, hh + 45);
+                ctx.quadraticCurveTo(15, hh + 25, 8, hh + 15);
+                ctx.fillStyle = 'rgba(255, 225, 50, 0.7)';
+                ctx.fill();
+                
+                // Taşlar (kırmızı yakutlar)
+                let rubyColor = 'rgba(255, 30, 50, 0.9)';
+                ctx.beginPath(); ctx.arc(0, hh + 8, 3, 0, Math.PI*2); ctx.fillStyle = rubyColor; ctx.fill();
+                ctx.beginPath(); ctx.arc(-12, hh + 35, 4, 0, Math.PI*2); ctx.fill();
+                ctx.beginPath(); ctx.arc(0, hh + 35, 5, 0, Math.PI*2); ctx.fill();
+                ctx.beginPath(); ctx.arc(12, hh + 35, 4, 0, Math.PI*2); ctx.fill();
+            } else if (shape === 'honey') {
+                // Bal peteği altıgen motifi
+                ctx.beginPath();
+                let hx = 0, hy = 0, hr = 14;
+                for (let i = 0; i <= 6; i++) {
+                    let angle = i * Math.PI / 3 + Math.PI/6;
+                    let px = hx + Math.cos(angle) * hr;
+                    let py = hy + Math.sin(angle) * hr;
+                    if(i===0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+                }
+                ctx.strokeStyle = 'rgba(255, 180, 50, 0.4)';
+                ctx.lineWidth = 2.5;
+                ctx.stroke();
+
+                // Küçük sızan bal damlası
+                ctx.beginPath();
+                ctx.arc(-topW*0.9, -hh*0.1, 4, 0, Math.PI*2);
+                ctx.fillStyle = 'rgba(255, 170, 0, 0.8)';
+                ctx.fill();
+                ctx.beginPath();
+                ctx.moveTo(-topW*0.9, -hh*0.1);
+                ctx.lineTo(-topW*0.9, -hh*0.1 + 10);
+                ctx.strokeStyle = 'rgba(255, 170, 0, 0.8)';
+                ctx.lineWidth = 8;
+                ctx.lineCap = 'round';
+                ctx.stroke();
+            } else if (shape === 'flask') {
+                // ZEHİR için Sağ tarafta ölçek çizgileri
+                ctx.beginPath();
+                for(let my = -hh + 20; my < hh - 10; my += 15) {
+                    let yRatio = (my - (-hh)) / (hh - (-hh));
+                    let edgeX = topW + (botW - topW) * yRatio;
+                    
+                    ctx.moveTo(edgeX - 12, my);
+                    ctx.lineTo(edgeX - 2, my);
+                    
+                    if (my + 7.5 < hh - 10) {
+                        let midY = my + 7.5;
+                        let midYRatio = (midY - (-hh)) / (hh - (-hh));
+                        let midEdgeX = topW + (botW - topW) * midYRatio;
+                        ctx.moveTo(midEdgeX - 6, midY);
+                        ctx.lineTo(midEdgeX - 2, midY);
+                    }
+                }
+                ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+                ctx.lineWidth = 1.5;
+                ctx.stroke();
+
+                // Toxic hava kabarcıkları (bubbles)
+                ctx.beginPath();
+                ctx.arc(-topW*0.3, hh*0.5, 4, 0, Math.PI*2);
+                ctx.arc(topW*0.2, hh*0.2, 3, 0, Math.PI*2);
+                ctx.arc(-topW*0.1, -hh*0.1, 5, 0, Math.PI*2);
+                ctx.fillStyle = 'rgba(100, 255, 100, 0.4)';
+                ctx.fill();
+            } else if (shape === 'volcano') {
+                // LAV için Cam Çatlakları / Lav damarları
+                ctx.beginPath();
+                ctx.moveTo(-topW*0.5, -hh*0.5);
+                ctx.lineTo(-topW*0.3, 0);
+                ctx.lineTo(-topW*0.6, hh*0.4);
+                ctx.lineTo(-topW*0.2, hh*0.8);
+                
+                ctx.moveTo(topW*0.4, -hh*0.3);
+                ctx.lineTo(topW*0.6, hh*0.1);
+                ctx.lineTo(topW*0.2, hh*0.6);
+                
+                ctx.strokeStyle = 'rgba(255, 100, 0, 0.8)';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+                // İç aydınlık damar
+                ctx.strokeStyle = 'rgba(255, 200, 50, 0.9)';
+                ctx.lineWidth = 1;
+                ctx.stroke();
+            } else if (shape === 'normal') {
+                // SU eskisi gibi düz kalacak, detay eklenmedi
+            } else if (shape === 'mystic') {
+                // Gece/Fantastik için mistik hilal ve yıldızlar
+                ctx.beginPath();
+                ctx.arc(0, 0, 12, 0, Math.PI*2);
+                ctx.strokeStyle = 'rgba(200, 150, 255, 0.4)';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+                
+                // Hilal
+                ctx.beginPath();
+                ctx.arc(0, 0, 10, -Math.PI*0.5, Math.PI*0.5, false);
+                ctx.arc(-4, 0, 8, Math.PI*0.5, -Math.PI*0.5, true);
+                ctx.fillStyle = 'rgba(220, 180, 255, 0.8)';
+                ctx.fill();
+
+                // Etrafta minik yıldız noktaları
+                ctx.beginPath();
+                ctx.arc(-20, -15, 1.5, 0, Math.PI*2);
+                ctx.arc(20, 15, 1.5, 0, Math.PI*2);
+                ctx.arc(-15, 25, 2, 0, Math.PI*2);
+                ctx.arc(15, -25, 2, 0, Math.PI*2);
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+                ctx.fill();
+            }
+
+            // 2. SOL KENAR PARILTISI (Cam Yansıması)
+            ctx.beginPath();
+            if (shape === 'goblet') {
+                ctx.moveTo(-topW + 4, -hh + 8);
+                ctx.bezierCurveTo(-topW + 4, 0, -botW + 4, hh - r, -botW + r, hh - 2);
+            } else if (shape === 'honey') {
+                ctx.moveTo(-topW + 4, -hh + 8);
+                ctx.bezierCurveTo(-topW*1.5 + 4, -hh/2, -botW + 4, hh - 4, -topW*0.7, hh - 2);
+            } else if (shape === 'mystic') {
+                ctx.moveTo(-topW + 4, -hh + 8);
+                ctx.lineTo(-topW - 4, -hh/2 + 10);
+                ctx.lineTo(-botW + 4, hh - r - 4);
+            } else {
+                ctx.moveTo(-topW + 4, -hh + 8);
+                ctx.lineTo(-botW + 4, hh - 8);
+            }
+            ctx.strokeStyle = glassHighlight;
+            ctx.lineWidth = 2.5;
+            ctx.stroke();
+
+            // SAĞ KENAR (İsteğe bağlı sönük parıltı)
+            ctx.beginPath();
+            if (shape === 'goblet') {
+                ctx.moveTo(topW - 4, -hh + 8);
+                ctx.bezierCurveTo(topW - 4, 0, botW - 4, hh - r, botW - r, hh - 2);
+            } else if (shape === 'honey') {
+                ctx.moveTo(topW - 4, -hh + 8);
+                ctx.bezierCurveTo(topW*1.5 - 4, -hh/2, botW - 4, hh - 4, topW*0.7, hh - 2);
+            } else if (shape === 'mystic') {
+                ctx.moveTo(topW - 4, -hh + 8);
+                ctx.lineTo(topW + 4, -hh/2 + 10);
+                ctx.lineTo(botW - 4, hh - r - 4);
+            } else {
+                ctx.moveTo(topW - 4, -hh + 8);
+                ctx.lineTo(botW - 4, hh - 8);
+            }
+            ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+
+            // 3. İÇ YANSIMA (Büyük oval)
+            ctx.beginPath();
+            ctx.ellipse(
+                -topW * 0.4,
+                -hh * 0.3,
+                topW * 0.18,
+                hh * 0.28,
+                -0.3,
+                0, Math.PI * 2
+            );
+            ctx.fillStyle = 'rgba(255,255,255,0.07)';
+            ctx.fill();
+
+            ctx.restore();
+        }
+
+        // Ana Menü için akan sıvı damlacıkları
+        if (!window.menuDrops) {
+            window.menuDrops = [];
+            for (let i = 0; i < 30; i++) {
+                window.menuDrops.push({
+                    x: Math.random() * 390,
+                    y: Math.random() * 844,
+                    vy: 0.4 + Math.random() * 0.9,
+                    r: 1.2 + Math.random() * 2.5,
+                    alpha: 0.15 + Math.random() * 0.35,
+                    phase: Math.random() * Math.PI * 2,
+                    colorIdx: Math.floor(Math.random() * 6)
+                });
+            }
+        }
+
+        function drawBarBackground() {
+            let t = Date.now() / 1000;
+            let W = canvas.width, H = canvas.height;
+
+            // ─── MENÜ DÖNGÜSEL TEMA (her 6 saniyede bir tema değişir) ───
+            const menuThemes = [
+                {bg:[18,38,62], lq:[79,195,247]},    // Su
+                {bg:[50,22,4],  lq:[255,120,20]},    // Lav
+                {bg:[8,44,16],  lq:[0,230,100]},     // Zehir
+                {bg:[44,38,4],  lq:[255,210,40]},    // Altın
+                {bg:[44,6,6],   lq:[220,30,50]},     // Kan
+                {bg:[22,14,48], lq:[160,110,240]}    // Gece
+            ];
+            let menuT = (t / 6) % menuThemes.length;
+            let menuI1 = Math.floor(menuT) % menuThemes.length;
+            let menuI2 = (menuI1 + 1) % menuThemes.length;
+            let menuMix = menuT - Math.floor(menuT);
+            // Smooth lerp
+            let menuTheme = {
+                bg: [
+                    menuThemes[menuI1].bg[0] * (1-menuMix) + menuThemes[menuI2].bg[0] * menuMix,
+                    menuThemes[menuI1].bg[1] * (1-menuMix) + menuThemes[menuI2].bg[1] * menuMix,
+                    menuThemes[menuI1].bg[2] * (1-menuMix) + menuThemes[menuI2].bg[2] * menuMix
+                ],
+                lq: [
+                    menuThemes[menuI1].lq[0] * (1-menuMix) + menuThemes[menuI2].lq[0] * menuMix,
+                    menuThemes[menuI1].lq[1] * (1-menuMix) + menuThemes[menuI2].lq[1] * menuMix,
+                    menuThemes[menuI1].lq[2] * (1-menuMix) + menuThemes[menuI2].lq[2] * menuMix
+                ],
+                idx: menuI1
+            };
+
+            // ── 1. ARKA PLAN: Derin koyu gradient ──
+            let mbg = menuTheme.bg.map(Math.round);
+            let bg = ctx.createLinearGradient(0, 0, 0, H);
+            bg.addColorStop(0,   `rgb(${Math.max(0,mbg[0]-8)},${Math.max(0,mbg[1]-8)},${Math.max(0,mbg[2]-8)})`);
+            bg.addColorStop(0.4, `rgb(${mbg[0]},${mbg[1]},${mbg[2]})`);
+            bg.addColorStop(1,   `rgb(${Math.round(mbg[0]*0.3)},${Math.round(mbg[1]*0.3)},${Math.round(mbg[2]*0.3)})`);
+            ctx.fillStyle = bg;
+            ctx.fillRect(0, 0, W, H);
+
+            // Köşe glow (mavi)
+            let cg = ctx.createRadialGradient(W/2, H*0.3, 0, W/2, H*0.3, 320);
+            let mlq = menuTheme.lq.map(Math.round);
+            cg.addColorStop(0, `rgba(${mlq[0]},${mlq[1]},${mlq[2]},0.10)`);
+            cg.addColorStop(1, 'rgba(0,0,0,0)');
+            ctx.fillStyle = cg;
+            ctx.fillRect(0, 0, W, H);
+
+            // Alt glow (turkuaz)
+            let bg2 = ctx.createRadialGradient(W/2, H, 0, W/2, H, 280);
+            bg2.addColorStop(0, `rgba(${mlq[0]},${mlq[1]},${mlq[2]},0.14)`);
+            bg2.addColorStop(1, 'rgba(0,0,0,0)');
+            ctx.fillStyle = bg2;
+            ctx.fillRect(0, H-280, W, 280);
+
+            // Tarama çizgileri
+            ctx.strokeStyle = 'rgba(255,255,255,0.018)';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            for (let y = 0; y < H; y += 32) { ctx.moveTo(0,y); ctx.lineTo(W,y); }
+            ctx.stroke();
+
+            // ─── TEMA BİLİNÇLİ ATMOSFER (oyun içiyle aynı stil) ───
+            let mlq2 = menuTheme.lq.map(Math.round);
+            let mIdx = menuTheme.idx;
+            for (let i = 0; i < window.menuDrops.length; i++) {
+                let d = window.menuDrops[i];
+                
+                if (mIdx === 0) {
+                    // Su: yukarı çıkan kabarcıklar
+                    d.y -= 0.4 + d.r * 0.15;
+                    d.x += Math.sin(t * 0.6 + d.phase) * 0.3;
+                    d.phase += 0.008;
+                    if (d.y < -10) { d.y = H + 10; d.x = Math.random() * W; }
+                    let pA = 0.3 + Math.sin(t * 1.8 + d.phase) * 0.2;
+                    ctx.beginPath();
+                    ctx.arc(d.x, d.y, d.r, 0, Math.PI * 2);
+                    ctx.fillStyle = `rgba(${mlq2[0]},${mlq2[1]},${mlq2[2]},${pA * 0.4})`;
+                    ctx.fill();
+                    if (d.r > 1.5) {
+                        ctx.strokeStyle = `rgba(255,255,255,${pA * 0.6})`;
+                        ctx.lineWidth = 0.7;
+                        ctx.stroke();
+                    }
+                }
+                else if (mIdx === 1) {
+                    // Lav: hızlı uçuşan kıvılcımlar
+                    d.y -= 1.0 + d.r * 0.3;
+                    d.x += Math.sin(t * 1.2 + d.phase) * 0.5;
+                    d.phase += 0.02;
+                    if (d.y < -5) { d.y = H + Math.random() * 50; d.x = Math.random() * W; }
+                    let sparkLife = (Math.sin(t * 3 + d.phase) + 1) * 0.5;
+                    ctx.beginPath();
+                    ctx.arc(d.x, d.y, d.r * 0.8, 0, Math.PI * 2);
+                    ctx.fillStyle = `rgba(255,${180 + Math.floor(sparkLife*60)},40,${0.7 * sparkLife})`;
+                    ctx.fill();
+                    ctx.beginPath();
+                    ctx.moveTo(d.x, d.y);
+                    ctx.lineTo(d.x, d.y + 8);
+                    ctx.strokeStyle = `rgba(255,140,40,${0.3 * sparkLife})`;
+                    ctx.lineWidth = 1;
+                    ctx.stroke();
+                }
+                else if (mIdx === 2) {
+                    // Zehir: yavaş asit halkaları
+                    d.y -= 0.3;
+                    d.x += Math.sin(t * 0.4 + d.phase) * 0.5;
+                    d.phase += 0.005;
+                    if (d.y < -10) { d.y = H + 10; d.x = Math.random() * W; }
+                    let pA = 0.4 + Math.sin(t * 1.2 + d.phase) * 0.3;
+                    ctx.beginPath();
+                    ctx.arc(d.x, d.y, d.r * 1.3, 0, Math.PI * 2);
+                    ctx.strokeStyle = `rgba(${mlq2[0]},${mlq2[1]},${mlq2[2]},${pA * 0.7})`;
+                    ctx.lineWidth = 0.8;
+                    ctx.stroke();
+                }
+                else if (mIdx === 3) {
+                    // Altın: parıldayan 4 köşeli yıldızlar
+                    d.phase += 0.04;
+                    d.x += Math.sin(t * 0.3 + d.phase) * 0.05;
+                    d.y += Math.cos(t * 0.4 + d.phase) * 0.05;
+                    if (d.y < -10) { d.y = H + 10; d.x = Math.random() * W; }
+                    if (d.y > H + 10) { d.y = -10; d.x = Math.random() * W; }
+                    let twink = (Math.sin(d.phase) + 1) * 0.5;
+                    let starSize = d.r * (0.5 + twink * 0.8);
+                    ctx.save();
+                    ctx.translate(d.x, d.y);
+                    ctx.fillStyle = `rgba(255,210,40,${0.8 * twink})`;
+                    ctx.beginPath();
+                    ctx.moveTo(0, -starSize);
+                    ctx.lineTo(starSize * 0.25, -starSize * 0.25);
+                    ctx.lineTo(starSize, 0);
+                    ctx.lineTo(starSize * 0.25, starSize * 0.25);
+                    ctx.lineTo(0, starSize);
+                    ctx.lineTo(-starSize * 0.25, starSize * 0.25);
+                    ctx.lineTo(-starSize, 0);
+                    ctx.lineTo(-starSize * 0.25, -starSize * 0.25);
+                    ctx.closePath();
+                    ctx.fill();
+                    ctx.restore();
+                }
+                else if (mIdx === 4) {
+                    // Kan: yukarıdan aşağı damlayan izler
+                    d.life = (d.life || Math.random()) + 0.004;
+                    if (d.life > 1) {
+                        d.life = 0;
+                        d.x = Math.random() * W;
+                        d.y = -20 - Math.random() * 100;
+                    }
+                    let dripY = d.y + d.life * (H + 100);
+                    let dripA = 0.7 * (1 - d.life * d.life);
+                    let trailGrad = ctx.createLinearGradient(d.x, dripY - 20, d.x, dripY);
+                    trailGrad.addColorStop(0, `rgba(${mlq2[0]},${mlq2[1]},${mlq2[2]},0)`);
+                    trailGrad.addColorStop(1, `rgba(${mlq2[0]},${mlq2[1]},${mlq2[2]},${dripA * 0.6})`);
+                    ctx.beginPath();
+                    ctx.moveTo(d.x, dripY - 20);
+                    ctx.lineTo(d.x, dripY);
+                    ctx.strokeStyle = trailGrad;
+                    ctx.lineWidth = 1.2;
+                    ctx.stroke();
+                    ctx.beginPath();
+                    ctx.ellipse(d.x, dripY, d.r * 0.7, d.r * 1.2, 0, 0, Math.PI * 2);
+                    ctx.fillStyle = `rgba(${mlq2[0]},${mlq2[1]},${mlq2[2]},${dripA})`;
+                    ctx.fill();
+                }
+                else {
+                    // Gece: parıldayan + bazıları kayan yıldızlar
+                    d.phase += 0.025 + d.r * 0.01;
+                    let twink = (Math.sin(d.phase) + 1) * 0.5;
+                    let isFalling = (d.r > 2.5);
+                    if (isFalling) {
+                        d.x += 1.5;
+                        d.y += 0.8;
+                        if (d.x > W + 30) {
+                            d.x = -30 - Math.random() * 100;
+                            d.y = Math.random() * H * 0.5;
+                        }
+                        let tailGrad = ctx.createLinearGradient(d.x, d.y, d.x - 30, d.y - 15);
+                        tailGrad.addColorStop(0, `rgba(255,255,255,${0.9 * twink})`);
+                        tailGrad.addColorStop(1, `rgba(255,255,255,0)`);
+                        ctx.beginPath();
+                        ctx.moveTo(d.x, d.y);
+                        ctx.lineTo(d.x - 30, d.y - 15);
+                        ctx.strokeStyle = tailGrad;
+                        ctx.lineWidth = 1.2;
+                        ctx.stroke();
+                        ctx.beginPath();
+                        ctx.arc(d.x, d.y, 1.5, 0, Math.PI * 2);
+                        ctx.fillStyle = `rgba(255,255,255,${0.8 * twink})`;
+                        ctx.fill();
+                    } else {
+                        ctx.beginPath();
+                        ctx.arc(d.x, d.y, d.r * 0.5, 0, Math.PI * 2);
+                        ctx.fillStyle = `rgba(255,255,255,${0.8 * twink})`;
+                        ctx.fill();
+                        if (d.r > 1.8 && twink > 0.7) {
+                            ctx.strokeStyle = `rgba(255,255,255,${0.6 * twink})`;
+                            ctx.lineWidth = 0.5;
+                            ctx.beginPath();
+                            ctx.moveTo(d.x - d.r * 2, d.y); ctx.lineTo(d.x + d.r * 2, d.y);
+                            ctx.moveTo(d.x, d.y - d.r * 2); ctx.lineTo(d.x, d.y + d.r * 2);
+                            ctx.stroke();
+                        }
+                    }
+                }
+            }
+
+            // ── 3. BÜYÜK BARDAK GÖRSELİ (Merkez dekor - Oyun içiyle aynı) ──
+            if (!window.menuCup) {
+                window.menuCup = { x: W/2, y: 340, w: 145, h: 175, fill: 65, angle: 0, isMenu: true };
+            }
+            // Hafif süzülme ve nefes alma efekti
+            window.menuCup.angle = Math.sin(t * 0.8) * 3;
+            window.menuCup.scale = 1.0 + Math.sin(t * 1.5) * 0.02;
+            // Menü bardağına geçici tema rengi ata
+            let _savedLq = [currentTheme.liquid[0], currentTheme.liquid[1], currentTheme.liquid[2]];
+            currentTheme.liquid[0] = menuTheme.lq[0];
+            currentTheme.liquid[1] = menuTheme.lq[1];
+            currentTheme.liquid[2] = menuTheme.lq[2];
+            drawCup(window.menuCup);
+            currentTheme.liquid[0] = _savedLq[0];
+            currentTheme.liquid[1] = _savedLq[1];
+            currentTheme.liquid[2] = _savedLq[2];
+
+            // Bardaktan damlayan su animasyonu (isteğe bağlı, dekoratif devam)
+            let dropT = (t * 0.8) % 1;
+            let dropX = window.menuCup.x + window.menuCup.w/2 + 2;
+            let dropY = (window.menuCup.y - window.menuCup.h/2) + dropT * (window.menuCup.h * 1.5);
+            let dropA = dropT < 0.5 ? dropT * 2 : (1 - dropT) * 2;
+            let lq = menuTheme.lq;
+            ctx.beginPath();
+            ctx.ellipse(dropX, dropY, 2.5, 3.5 + dropT * 2, 0, 0, Math.PI*2);
+            ctx.fillStyle = `rgba(${lq[0]},${lq[1]},${lq[2]},${dropA * 0.6})`;
+            ctx.fill();
+
+            // ── 4. BAŞLIK ──
+            let flicker = 0.92 + Math.sin(t * 14) * 0.08;
+            if (Math.random() > 0.985) flicker = 0.25;
+            ctx.save();
+            ctx.textAlign = 'center';
+            // Glow katmanı
+            ctx.shadowColor = '#4fc3f7';
+            ctx.shadowBlur = 30;
+            ctx.fillStyle = `rgba(79,195,247,${flicker})`;
+            ctx.font = "bold 48px 'Bebas Neue', cursive";
+            ctx.fillText('POUR DOWN', W/2, 130);
+            // İnce beyaz üst katman
+            ctx.shadowBlur = 8;
+            ctx.fillStyle = `rgba(220,245,255,${flicker * 0.7})`;
+            ctx.font = "bold 48px 'Bebas Neue', cursive";
+            ctx.fillText('POUR DOWN', W/2, 130);
+            ctx.restore();
+
+            // Alt başlık
+            ctx.save();
+            ctx.textAlign = 'center';
+            ctx.fillStyle = 'rgba(150,210,240,0.65)';
+            ctx.font = "17px 'Bebas Neue', cursive";
+            ctx.fillText('Bardağı eğilt  •  Sıvıyı dök  •  Devam et', W/2, 165);
+            ctx.restore();
+
+            // Seviye rozeti (tema rengi çizgi)
+            ctx.save();
+            ctx.strokeStyle = 'rgba(79,195,247,0.2)';
+            ctx.lineWidth = 1;
+            ctx.beginPath(); ctx.moveTo(60, 185); ctx.lineTo(W-60, 185); ctx.stroke();
+            ctx.restore();
+        }
+
+        // Ana oyun döngüsü
+        let lastFrameTime = performance.now();
+        let dt = 1; // 60Hz'e göre normalize edilmiş çarpan
+        function draw() {
+            let nowTime = performance.now();
+            dt = Math.min(2.5, (nowTime - lastFrameTime) / 8.33);
+            lastFrameTime = nowTime;
+
+            // ─── PERFORMANS: FPS sayımı + Adaptive ambient ───
+            _fpsFrameCount++;
+            if (nowTime - _fpsLastCheck >= 1000) {
+                _currentFps = _fpsFrameCount;
+                _fpsFrameCount = 0;
+                _fpsLastCheck = nowTime;
+                _fpsHistory.shift(); _fpsHistory.push(_currentFps);
+                // Son 3 saniyenin ortalaması düşükse particle azalt
+                let avg = (_fpsHistory[0] + _fpsHistory[1] + _fpsHistory[2]) / 3;
+                if (avg < 50 && _ambientParticleTarget > 25) {
+                    _ambientParticleTarget = 25;
+                } else if (avg > 58 && _ambientParticleTarget < 50) {
+                    _ambientParticleTarget = 50;
+                }
+            }
+            if (gameState.state === 'MENU') {
+                drawBarBackground();
+                let W = canvas.width, H = canvas.height;
+
+                // ── REKOR KUTUSU (glassmorphism) ──
+                let scoreText = '🏆  ' + gameState.highScore;
+                let recY = 615;
+                ctx.save();
+                ctx.fillStyle = 'rgba(255,215,0,0.07)';
+                ctx.beginPath(); ctx.roundRect(W/2 - 100, recY, 200, 50, 25); ctx.fill();
+                ctx.strokeStyle = 'rgba(255,215,0,0.35)'; ctx.lineWidth = 1.5; ctx.stroke();
+                ctx.shadowColor = 'rgba(255,215,0,0.6)'; ctx.shadowBlur = 12;
+                ctx.fillStyle = '#FFD700';
+                ctx.font = "bold 20px 'Bebas Neue', cursive";
+                ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+                ctx.fillText(scoreText, W/2, recY + 25);
+                ctx.shadowBlur = 0; ctx.textBaseline = 'alphabetic';
+                ctx.restore();
+
+                // ── OYNA BUTONU ──
+                let pY2 = btnPlay.y;
+                ctx.save();
+                // Dış glow halkası
+                ctx.shadowColor = '#4fc3f7'; ctx.shadowBlur = 22;
+                let pG = ctx.createLinearGradient(0, pY2 - 30, 0, pY2 + 30);
+                pG.addColorStop(0, '#29b6f6');
+                pG.addColorStop(1, '#0277bd');
+                ctx.fillStyle = pG;
+                ctx.beginPath();
+                ctx.roundRect(btnPlay.x - btnPlay.w/2, pY2 - 30, btnPlay.w, 60, 30); ctx.fill();
+                // Üst parıltı şeridi
+                ctx.shadowBlur = 0;
+                ctx.fillStyle = 'rgba(255,255,255,0.15)';
+                ctx.beginPath();
+                ctx.roundRect(btnPlay.x - btnPlay.w/2 + 8, pY2 - 28, btnPlay.w - 16, 22, [16,16,0,0]); ctx.fill();
+                ctx.fillStyle = 'white';
+                ctx.font = "bold 28px 'Bebas Neue', cursive";
+                ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+                ctx.fillText('▶  OYNA', W/2, pY2 + 2);
+                ctx.textBaseline = 'alphabetic';
+                ctx.restore();
+
+                // ── SES BUTONU ──
+                ctx.save();
+                ctx.beginPath();
+                ctx.arc(btnSound.x, btnSound.y, btnSound.r, 0, Math.PI*2);
+                ctx.fillStyle = 'rgba(255,255,255,0.1)';
+                ctx.strokeStyle = 'rgba(255,255,255,0.25)'; ctx.lineWidth = 1.5;
+                ctx.fill(); ctx.stroke();
+                ctx.fillStyle = 'white';
+                ctx.font = "18px 'Bebas Neue', cursive"; ctx.textAlign = 'center';
+                ctx.fillText(gameState.soundEnabled ? '🔊' : '🔇', btnSound.x, btnSound.y + 6);
+                ctx.restore();
+
+                // ── BUGÜNÜN GÖREVLERİ PANELİ ──
+                let mY = 685;
+                ctx.save();
+                ctx.fillStyle = 'rgba(0,0,0,0.35)';
+                ctx.beginPath(); ctx.roundRect(W/2 - 150, mY, 300, 108, 14); ctx.fill();
+                ctx.strokeStyle = 'rgba(255,255,255,0.1)'; ctx.lineWidth = 1; ctx.stroke();
+                ctx.fillStyle = 'rgba(255,255,255,0.35)';
+                ctx.font = "bold 11px 'Bebas Neue', cursive"; ctx.textAlign = 'center';
+                ctx.fillText('📋  BUGÜNÜN GÖREVLERİ', W/2, mY + 16);
+                dailyMissions.forEach(function(m, i) {
+                    let my = mY + 32 + i * 26;
+                    let pct = m.done ? 1 : Math.min(1, m.progress / m.target);
+                    ctx.fillStyle = 'rgba(255,255,255,0.06)';
+                    ctx.beginPath(); ctx.roundRect(W/2 - 138, my, 276, 18, 9); ctx.fill();
+                    if (pct > 0) {
+                        ctx.fillStyle = m.done ? '#4caf50' : '#4fc3f7';
+                        ctx.beginPath(); ctx.roundRect(W/2 - 138, my, 276 * pct, 18, 9); ctx.fill();
+                    }
+                    ctx.fillStyle = m.done ? 'rgba(150,255,150,0.9)' : 'rgba(255,255,255,0.75)';
+                    ctx.font = "12px 'Bebas Neue', cursive"; ctx.textAlign = 'left';
+                    ctx.fillText((m.done ? '✅' : m.icon) + ' ' + m.text, W/2 - 132, my + 13);
+                    ctx.textAlign = 'right';
+                    ctx.fillStyle = '#ffd700';
+                    ctx.fillText('+' + m.bonus, W/2 + 132, my + 13);
+                });
+                ctx.restore();
+
+                // ── ALT BİLGİ ŞERİDİ ──
+                ctx.save();
+                let sbGrad = ctx.createLinearGradient(0, H - 38, 0, H);
+                sbGrad.addColorStop(0, 'rgba(0,0,0,0)');
+                sbGrad.addColorStop(1, 'rgba(0,0,0,0.45)');
+                ctx.fillStyle = sbGrad;
+                ctx.fillRect(0, H - 38, W, 38);
+                ctx.strokeStyle = 'rgba(79,195,247,0.18)';
+                ctx.lineWidth = 1;
+                ctx.beginPath(); ctx.moveTo(20, H - 38); ctx.lineTo(W - 20, H - 38); ctx.stroke();
+                ctx.fillStyle = 'rgba(255,255,255,0.28)';
+                ctx.font = "14px 'Bebas Neue', cursive";
+                ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+                ctx.fillText('POUR DOWN  v1.1  •  ANA EKRANA EKLENEBİLİR  •  🏆 REKOR: ' + gameState.highScore, W / 2, H - 18);
+                ctx.textBaseline = 'alphabetic';
+                ctx.restore();
+
+                requestAnimationFrame(draw);
+                return;
+            }
+
+            // Tema Güncelleme ve Geçiş
+            let themeIndex = Math.floor((gameState.level - 1) / 5) % themes.length;
+            let targetTheme = themes[themeIndex];
+            
+            // Yumuşak renk geçişi (lerp)
+            currentTheme.bgInner = lerpArray(currentTheme.bgInner, targetTheme.bgInner, 0.02);
+            currentTheme.bgOuter = lerpArray(currentTheme.bgOuter, targetTheme.bgOuter, 0.02);
+            currentTheme.liquid = lerpArray(currentTheme.liquid, targetTheme.liquid, 0.02);
+
+            // Tema Değişim Dalga Efekti Tetikleyici
+            if (themeIndex !== lastThemeIndex) {
+                themeRings.push({ r: 0, alpha: 0.6, color: [...targetTheme.liquid] });
+                lastThemeIndex = themeIndex;
+            }
+
+            // OYUN ARKA PLANI — Zengin Atmosferik Arka Plan
+            {
+                let t2 = Date.now() / 1000;
+                let lqBg = currentTheme.liquid.map(Math.round);
+                let cIn = currentTheme.bgInner.map(Math.round);
+                let cOut = currentTheme.bgOuter.map(Math.round);
+
+                // 1. Çok katmanlı dikey gradient (derinlik hissi)
+                let bgG = ctx.createLinearGradient(0, 0, 0, canvas.height);
+                bgG.addColorStop(0,   `rgb(${Math.min(255,cOut[0]+8)},${Math.min(255,cOut[1]+8)},${Math.min(255,cOut[2]+8)})`);
+                bgG.addColorStop(0.3, `rgb(${cIn[0]},${cIn[1]},${cIn[2]})`);
+                bgG.addColorStop(0.65,`rgb(${Math.round(cIn[0]*0.75)},${Math.round(cIn[1]*0.75)},${Math.round(cIn[2]*0.75)})`);
+                bgG.addColorStop(1,   `rgb(${cOut[0]},${cOut[1]},${cOut[2]})`);
+                ctx.fillStyle = bgG;
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                // 2. Nefes alan merkez glow
+                let pulse = 260 + Math.sin(t2 * 0.75) * 40;
+                let cGlow = ctx.createRadialGradient(canvas.width/2, canvas.height*0.38, 0, canvas.width/2, canvas.height*0.38, pulse);
+                cGlow.addColorStop(0, `rgba(${lqBg[0]},${lqBg[1]},${lqBg[2]},0.14)`);
+                cGlow.addColorStop(1, 'rgba(0,0,0,0)');
+                ctx.fillStyle = cGlow;
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                // 3. Yukarıdan ışık huzmesi
+                ctx.save();
+                ctx.globalCompositeOperation = 'screen';
+                let rayG = ctx.createLinearGradient(0, 0, 0, canvas.height * 0.75);
+                rayG.addColorStop(0, `rgba(${lqBg[0]},${lqBg[1]},${lqBg[2]},0.1)`);
+                rayG.addColorStop(1, 'rgba(0,0,0,0)');
+                ctx.fillStyle = rayG;
+                ctx.beginPath();
+                ctx.moveTo(canvas.width/2 - 50, 0);
+                ctx.lineTo(canvas.width/2 + 50, 0);
+                ctx.lineTo(canvas.width/2 + 200, canvas.height * 0.75);
+                ctx.lineTo(canvas.width/2 - 200, canvas.height * 0.75);
+                ctx.fill();
+
+                // 4. Hareketli ışık orbs (2 adet)
+                for (let oi = 0; oi < 2; oi++) {
+                    let ox = canvas.width/2 + Math.sin(t2*0.38 + oi*2.2)*130;
+                    let oy = canvas.height/2 + Math.cos(t2*0.28 + oi*1.9)*160;
+                    let oG = ctx.createRadialGradient(ox, oy, 0, ox, oy, 200);
+                    oG.addColorStop(0, `rgba(${lqBg[0]},${lqBg[1]},${lqBg[2]},0.07)`);
+                    oG.addColorStop(1, 'rgba(0,0,0,0)');
+                    ctx.fillStyle = oG;
+                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+                }
+                ctx.restore();
+
+                // 5. Zemin yansıması
+                let floorG = ctx.createRadialGradient(canvas.width/2, canvas.height, 0, canvas.width/2, canvas.height, 230);
+                floorG.addColorStop(0, `rgba(${lqBg[0]},${lqBg[1]},${lqBg[2]},0.18)`);
+                floorG.addColorStop(1, 'rgba(0,0,0,0)');
+                ctx.fillStyle = floorG;
+                ctx.fillRect(0, canvas.height - 230, canvas.width, 230);
+
+                // ─── TEMA BAZLI TAM EKRAN GÖRSEL EFEKTİ ───
+                let themeIdxFx = Math.floor((gameState.level - 1) / 5) % 6;
+                
+                if (themeIdxFx === 1) {
+                    // LAV: alttan turuncu glow nefes alır
+                    let lavaGlow = ctx.createLinearGradient(0, canvas.height, 0, canvas.height * 0.4);
+                    let lavaP = 0.5 + Math.sin(t2 * 1.2) * 0.15;
+                    lavaGlow.addColorStop(0, `rgba(255,120,20,${0.18 * lavaP})`);
+                    lavaGlow.addColorStop(1, 'rgba(255,120,20,0)');
+                    ctx.fillStyle = lavaGlow;
+                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+                }
+                else if (themeIdxFx === 2) {
+                    // ZEHİR: yatay sis bantları
+                    for (let fb = 0; fb < 3; fb++) {
+                        let fy = canvas.height * (0.3 + fb * 0.25) + Math.sin(t2 * 0.4 + fb) * 30;
+                        let fogG = ctx.createRadialGradient(canvas.width/2, fy, 0, canvas.width/2, fy, 200);
+                        fogG.addColorStop(0, `rgba(0,230,100,0.08)`);
+                        fogG.addColorStop(1, 'rgba(0,230,100,0)');
+                        ctx.fillStyle = fogG;
+                        ctx.fillRect(0, fy - 100, canvas.width, 200);
+                    }
+                }
+                else if (themeIdxFx === 3) {
+                    // ALTIN: ışık çakıntıları (rastgele şimşek parıltıları)
+                    if (Math.random() < 0.02) {
+                        let flashX = Math.random() * canvas.width;
+                        let flashY = Math.random() * canvas.height;
+                        let flashG = ctx.createRadialGradient(flashX, flashY, 0, flashX, flashY, 60);
+                        flashG.addColorStop(0, 'rgba(255,230,100,0.4)');
+                        flashG.addColorStop(1, 'rgba(255,230,100,0)');
+                        ctx.fillStyle = flashG;
+                        ctx.fillRect(flashX - 60, flashY - 60, 120, 120);
+                    }
+                }
+                else if (themeIdxFx === 4) {
+                    // KAN: kenar vinyetlemesi (köşeler kararır)
+                    let vignG = ctx.createRadialGradient(canvas.width/2, canvas.height/2, canvas.height * 0.3, canvas.width/2, canvas.height/2, canvas.height * 0.7);
+                    vignG.addColorStop(0, 'rgba(0,0,0,0)');
+                    vignG.addColorStop(1, 'rgba(40,0,0,0.5)');
+                    ctx.fillStyle = vignG;
+                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+                }
+                else if (themeIdxFx === 5) {
+                    // GECE: nebula bulutu (yavaş hareket eden mor)
+                    let nebX = canvas.width * 0.3 + Math.sin(t2 * 0.15) * 80;
+                    let nebY = canvas.height * 0.4 + Math.cos(t2 * 0.12) * 60;
+                    let nebG = ctx.createRadialGradient(nebX, nebY, 0, nebX, nebY, 250);
+                    nebG.addColorStop(0, `rgba(160,110,240,0.18)`);
+                    nebG.addColorStop(0.5, `rgba(160,110,240,0.05)`);
+                    nebG.addColorStop(1, 'rgba(160,110,240,0)');
+                    ctx.fillStyle = nebG;
+                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+                }
+
+                // 6. Tarama çizgileri (hafif)
+                ctx.strokeStyle = 'rgba(255,255,255,0.012)';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                for (let sy = 0; sy < canvas.height; sy += 28) {
+                    ctx.moveTo(0, sy); ctx.lineTo(canvas.width, sy);
+                }
+                ctx.stroke();
+
+                // 7. TEMA BİLİNÇLİ ATMOSFER PARÇACIKLARI
+                let themeIdxBg = Math.floor((gameState.level - 1) / 5) % 6;
+                
+                // ADAPTIVE: FPS düşükse daha az particle render et
+                let _ambLimit = Math.min(_ambientParticleTarget, ambientParticles.length);
+                for (let ap = 0; ap < _ambLimit; ap++) {
+                    let p = ambientParticles[ap];
+                    
+                    if (themeIdxBg === 0) {
+                        // ─── SU: yukarı çıkan baloncuklar (içi boş halka) ───
+                        p.y += p.vy;
+                        p.x += p.vx + Math.sin(t2 * 0.6 + p.phase) * 0.25;
+                        p.phase += 0.008;
+                        if (p.y < -8) { p.y = canvas.height + 8; p.x = Math.random() * canvas.width; }
+                        let pA = p.alpha * (0.6 + Math.sin(t2 * 1.8 + p.phase) * 0.4);
+                        ctx.beginPath();
+                        ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+                        ctx.fillStyle = `rgba(${lqBg[0]},${lqBg[1]},${lqBg[2]},${pA * 0.4})`;
+                        ctx.fill();
+                        if (p.r > 1.5) {
+                            ctx.strokeStyle = `rgba(255,255,255,${pA * 0.6})`;
+                            ctx.lineWidth = 0.7;
+                            ctx.stroke();
+                        }
+                    }
+                    else if (themeIdxBg === 1) {
+                        // ─── LAV: yukarı uçuşan kıvılcımlar (parlak nokta + iz) ───
+                        p.y += p.vy * 1.5;
+                        p.x += p.vx + Math.sin(t2 * 1.2 + p.phase) * 0.4;
+                        p.phase += 0.02;
+                        if (p.y < -5) { p.y = canvas.height + Math.random() * 50; p.x = Math.random() * canvas.width; }
+                        // kıvılcım parlama
+                        let sparkLife = (Math.sin(t2 * 3 + p.phase) + 1) * 0.5;
+                        let sparkA = p.alpha * 3 * sparkLife;
+                        // ana kıvılcım
+                        ctx.beginPath();
+                        ctx.arc(p.x, p.y, p.r * 0.8, 0, Math.PI * 2);
+                        ctx.fillStyle = `rgba(255,${180 + Math.floor(sparkLife*60)},40,${sparkA})`;
+                        ctx.fill();
+                        // izi (alt taraf)
+                        ctx.beginPath();
+                        ctx.moveTo(p.x, p.y);
+                        ctx.lineTo(p.x - p.vx * 6, p.y - p.vy * 8);
+                        ctx.strokeStyle = `rgba(255,140,40,${sparkA * 0.4})`;
+                        ctx.lineWidth = 1;
+                        ctx.stroke();
+                    }
+                    else if (themeIdxBg === 2) {
+                        // ─── ZEHİR: ağır asit baloncukları (yavaş, halka) ───
+                        p.y += p.vy * 0.5;
+                        p.x += p.vx + Math.sin(t2 * 0.4 + p.phase) * 0.5;
+                        p.phase += 0.005;
+                        if (p.y < -10) { p.y = canvas.height + 10; p.x = Math.random() * canvas.width; }
+                        let pA = p.alpha * (0.5 + Math.sin(t2 * 1.2 + p.phase) * 0.5);
+                        // halka
+                        ctx.beginPath();
+                        ctx.arc(p.x, p.y, p.r * 1.3, 0, Math.PI * 2);
+                        ctx.strokeStyle = `rgba(${lqBg[0]},${lqBg[1]},${lqBg[2]},${pA * 0.7})`;
+                        ctx.lineWidth = 0.8;
+                        ctx.stroke();
+                    }
+                    else if (themeIdxBg === 3) {
+                        // ─── ALTIN: parıldayan yıldızlar (4 köşeli sparkle) ───
+                        p.twinkle += 0.04;
+                        p.x += Math.sin(t2 * 0.3 + p.phase) * 0.05;
+                        p.y += Math.cos(t2 * 0.4 + p.phase) * 0.05;
+                        let twink = (Math.sin(p.twinkle) + 1) * 0.5;
+                        let starA = p.alpha * 2 * twink;
+                        let starSize = p.r * (0.5 + twink * 0.8);
+                        // 4 köşeli yıldız
+                        ctx.save();
+                        ctx.translate(p.x, p.y);
+                        ctx.rotate(p.phase);
+                        ctx.fillStyle = `rgba(255,210,40,${starA})`;
+                        ctx.beginPath();
+                        ctx.moveTo(0, -starSize);
+                        ctx.lineTo(starSize * 0.25, -starSize * 0.25);
+                        ctx.lineTo(starSize, 0);
+                        ctx.lineTo(starSize * 0.25, starSize * 0.25);
+                        ctx.lineTo(0, starSize);
+                        ctx.lineTo(-starSize * 0.25, starSize * 0.25);
+                        ctx.lineTo(-starSize, 0);
+                        ctx.lineTo(-starSize * 0.25, -starSize * 0.25);
+                        ctx.closePath();
+                        ctx.fill();
+                        ctx.restore();
+                    }
+                    else if (themeIdxBg === 4) {
+                        // ─── KAN: yukarıdan damlayan kırmızı izler ───
+                        // p.life kullanılıyor: 0'dan 1'e gidip resetleniyor
+                        p.life += 0.004;
+                        if (p.life > 1) {
+                            p.life = 0;
+                            p.x = Math.random() * canvas.width;
+                            p.y = -20 - Math.random() * 100;
+                        }
+                        let dripY = p.y + p.life * (canvas.height + 100);
+                        let dripA = p.alpha * 2.5 * (1 - p.life * p.life);
+                        // dikey iz çizgisi
+                        ctx.beginPath();
+                        ctx.moveTo(p.x, dripY - 20);
+                        ctx.lineTo(p.x, dripY);
+                        let trailGrad = ctx.createLinearGradient(p.x, dripY - 20, p.x, dripY);
+                        trailGrad.addColorStop(0, `rgba(${lqBg[0]},${lqBg[1]},${lqBg[2]},0)`);
+                        trailGrad.addColorStop(1, `rgba(${lqBg[0]},${lqBg[1]},${lqBg[2]},${dripA * 0.6})`);
+                        ctx.strokeStyle = trailGrad;
+                        ctx.lineWidth = 1.2;
+                        ctx.stroke();
+                        // damla başı
+                        ctx.beginPath();
+                        ctx.ellipse(p.x, dripY, p.r * 0.7, p.r * 1.2, 0, 0, Math.PI * 2);
+                        ctx.fillStyle = `rgba(${lqBg[0]},${lqBg[1]},${lqBg[2]},${dripA})`;
+                        ctx.fill();
+                    }
+                    else if (themeIdxBg === 5) {
+                        // ─── GECE: parıldayan yıldızlar + bazıları kayan ───
+                        p.twinkle += 0.025 + (p.r * 0.01);
+                        let twink = (Math.sin(p.twinkle) + 1) * 0.5;
+                        let starA = p.alpha * 2.5 * (0.3 + twink * 0.7);
+                        let isFalling = (p.r > 2.5);
+                        if (isFalling) {
+                            // kayan yıldız
+                            p.x += 1.5;
+                            p.y += 0.8;
+                            if (p.x > canvas.width + 30) {
+                                p.x = -30 - Math.random() * 100;
+                                p.y = Math.random() * canvas.height * 0.5;
+                            }
+                            // kuyruk
+                            ctx.beginPath();
+                            ctx.moveTo(p.x, p.y);
+                            ctx.lineTo(p.x - 30, p.y - 15);
+                            let tailGrad = ctx.createLinearGradient(p.x, p.y, p.x - 30, p.y - 15);
+                            tailGrad.addColorStop(0, `rgba(255,255,255,${starA * 0.9})`);
+                            tailGrad.addColorStop(1, `rgba(255,255,255,0)`);
+                            ctx.strokeStyle = tailGrad;
+                            ctx.lineWidth = 1.2;
+                            ctx.stroke();
+                            ctx.beginPath();
+                            ctx.arc(p.x, p.y, 1.5, 0, Math.PI * 2);
+                            ctx.fillStyle = `rgba(255,255,255,${starA})`;
+                            ctx.fill();
+                        } else {
+                            // sabit yıldız (sadece parlar)
+                            ctx.beginPath();
+                            ctx.arc(p.x, p.y, p.r * 0.5, 0, Math.PI * 2);
+                            ctx.fillStyle = `rgba(255,255,255,${starA})`;
+                            ctx.fill();
+                            // çapraz parıltı (büyük yıldızlarda)
+                            if (p.r > 1.8 && twink > 0.7) {
+                                ctx.strokeStyle = `rgba(255,255,255,${starA * 0.6})`;
+                                ctx.lineWidth = 0.5;
+                                ctx.beginPath();
+                                ctx.moveTo(p.x - p.r * 2, p.y); ctx.lineTo(p.x + p.r * 2, p.y);
+                                ctx.moveTo(p.x, p.y - p.r * 2); ctx.lineTo(p.x, p.y + p.r * 2);
+                                ctx.stroke();
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Tema Geçiş Dairesi (Ring)
+            for (let i = themeRings.length - 1; i >= 0; i--) {
+                let ring = themeRings[i];
+                ring.r += 25; // Hızlıca büyü
+                ring.alpha -= 0.02; // ~0.5 saniyede solma
+                
+                ctx.beginPath();
+                ctx.arc(canvas.width/2, canvas.height/2, ring.r, 0, Math.PI*2);
+                ctx.strokeStyle = `rgba(${Math.round(ring.color[0])}, ${Math.round(ring.color[1])}, ${Math.round(ring.color[2])}, ${ring.alpha})`;
+                ctx.lineWidth = 15;
+                ctx.stroke();
+
+                if (ring.alpha <= 0) {
+                    themeRings[i] = themeRings[themeRings.length - 1];
+                    themeRings.pop();
+                }
+            }
+
+            if (gameState.state === 'GAMEOVER') {
+                // Koyu overlay
+                ctx.fillStyle = 'rgba(0,0,0,0.78)';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                let elapsed = (Date.now() - gameOverStartTime) / 1000;
+                let slide = Math.min(1, elapsed * 3.5);
+                slide = slide < 1 ? 1 - Math.pow(1 - slide, 3) : 1; // ease-out cubic
+
+                let lq = currentTheme.liquid.map(Math.round);
+                let cx2 = canvas.width / 2;
+                let pX = 35, pW = canvas.width - 70, pH = 520;
+                let pY = (canvas.height / 2 - 260) + (1 - slide) * 80;
+
+                // Panel
+                ctx.fillStyle = 'rgba(8,18,35,0.95)';
+                ctx.beginPath(); ctx.roundRect(pX, pY, pW, pH, 22); ctx.fill();
+                ctx.strokeStyle = 'rgba(255,255,255,0.1)'; ctx.lineWidth = 1.5;
+                ctx.beginPath(); ctx.roundRect(pX, pY, pW, pH, 22); ctx.stroke();
+
+                // Üst renk çizgisi
+                let acG = ctx.createLinearGradient(pX, 0, pX + pW, 0);
+                acG.addColorStop(0, 'transparent');
+                acG.addColorStop(0.3, `rgba(${lq[0]},${lq[1]},${lq[2]},0.9)`);
+                acG.addColorStop(0.7, `rgba(${lq[0]},${lq[1]},${lq[2]},0.9)`);
+                acG.addColorStop(1, 'transparent');
+                ctx.strokeStyle = acG; ctx.lineWidth = 2.5;
+                ctx.beginPath(); ctx.moveTo(pX + 22, pY); ctx.lineTo(pX + pW - 22, pY); ctx.stroke();
+
+                ctx.textAlign = 'center';
+
+                // Başlık
+                ctx.save();
+                ctx.shadowColor = `rgba(${lq[0]},${lq[1]},${lq[2]},0.9)`; ctx.shadowBlur = 22;
+                ctx.fillStyle = 'white'; ctx.font = "bold 40px 'Bebas Neue', cursive";
+                ctx.fillText('OYUN BİTTİ', cx2, pY + 62);
+                ctx.restore();
+
+                ctx.fillStyle = 'rgba(255,255,255,0.5)'; ctx.font = "17px 'Bebas Neue', cursive";
+                ctx.fillText('Level ' + gameState.level + "'e ulaştın", cx2, pY + 95);
+
+                // Ayraç
+                ctx.strokeStyle = 'rgba(255,255,255,0.07)'; ctx.lineWidth = 1;
+                ctx.beginPath(); ctx.moveTo(pX+30, pY+115); ctx.lineTo(pX+pW-30, pY+115); ctx.stroke();
+
+                // Skor — animasyonlu sayaç
+                let scorePct = Math.min(1, elapsed / 1.5);
+                scorePct = scorePct < 1 ? 1 - Math.pow(1 - scorePct, 3) : 1;
+                let displayScore = Math.round(scorePct * gameState.score);
+                ctx.fillStyle = 'rgba(255,255,255,0.6)'; ctx.font = "16px 'Bebas Neue', cursive";
+                ctx.fillText('SKOR', cx2, pY + 155);
+                ctx.fillStyle = 'white'; ctx.font = "72px 'Bebas Neue', cursive";
+                ctx.fillText(displayScore, cx2, pY + 225);
+
+                // High score / Yeni rekor
+                if (gameState.isNewHighScore) {
+                    let nt = Date.now() / 1000;
+                    let nglow = 18 + Math.sin(nt * 5) * 10;
+                    let nshimmer = 0.78 + Math.sin(nt * 7) * 0.22;
+                    ctx.save();
+                    ctx.shadowColor = 'rgba(255,215,0,0.95)'; ctx.shadowBlur = nglow;
+                    ctx.fillStyle = `rgba(255,${Math.round(195 + Math.sin(nt*6)*20)},0,${nshimmer})`;
+                    ctx.font = "28px 'Bebas Neue', cursive";
+                    ctx.fillText('\uD83C\uDFC6 YEN\u0130 REKOR!', cx2, pY + 278);
+                    ctx.restore();
+                    // Sparkle yıldızlar
+                    let sparks = [{x:cx2-115,y:pY+268},{x:cx2+115,y:pY+268},{x:cx2-78,y:pY+254},{x:cx2+78,y:pY+254}];
+                    sparks.forEach(function(sp, si) {
+                        let ph = nt * 3.5 + si * 1.7;
+                        let sa = 0.4 + Math.sin(ph) * 0.5;
+                        let ss = 4 + Math.sin(ph * 1.4) * 2;
+                        ctx.save();
+                        ctx.fillStyle = `rgba(255,230,80,${Math.max(0,sa)})`;
+                        ctx.beginPath();
+                        for (let pt = 0; pt < 8; pt++) {
+                            let ang = (pt / 8) * Math.PI * 2;
+                            let rr = pt % 2 === 0 ? ss : ss * 0.38;
+                            let sx2 = sp.x + Math.cos(ang) * rr;
+                            let sy2 = sp.y + Math.sin(ang) * rr;
+                            if (pt === 0) ctx.moveTo(sx2, sy2); else ctx.lineTo(sx2, sy2);
+                        }
+                        ctx.closePath(); ctx.fill();
+                        ctx.restore();
+                    });
+                } else {
+                    ctx.fillStyle = 'rgba(255,215,0,0.65)'; ctx.font = "20px 'Bebas Neue', cursive";
+                    ctx.fillText('\uD83C\uDFC6 Rekor: ' + gameState.highScore, cx2, pY + 278);
+                }
+
+                // Ayraç 2
+                ctx.strokeStyle = 'rgba(255,255,255,0.07)'; ctx.lineWidth = 1;
+                ctx.beginPath(); ctx.moveTo(pX+30, pY+305); ctx.lineTo(pX+pW-30, pY+305); ctx.stroke();
+
+                // DEVAM ET butonu (sadece hak kullanılmadıysa)
+                let b3Y = pY + 360;
+                if (!adSystem.continueUsed) {
+                    ctx.fillStyle = 'rgba(50,200,100,0.15)';
+                    ctx.beginPath(); ctx.roundRect(pX+20, b3Y-20, pW-40, 40, 20); ctx.fill();
+                    ctx.strokeStyle = 'rgba(50,200,100,0.4)'; ctx.lineWidth = 1; ctx.stroke();
+                    ctx.fillStyle = 'rgba(100,255,150,0.85)'; ctx.font = "14px 'Bebas Neue', cursive";
+                    ctx.fillText('🎥  Reklam izle → +20% Sıvı', cx2, b3Y + 5);
+                    btnContinue.y = b3Y; 
+                }
+
+                // TEKRAR OYNA butonu — büyük ve parlak
+                let b1Y = pY + 415;
+                ctx.save();
+                // Pulse glow
+                let pulseT = Date.now() / 1000;
+                let glowSize = 25 + Math.sin(pulseT * 3) * 10;
+                ctx.shadowColor = `rgba(${lq[0]},${lq[1]},${lq[2]},0.9)`;
+                ctx.shadowBlur = glowSize;
+                let bG = ctx.createLinearGradient(0, b1Y-32, 0, b1Y+32);
+                bG.addColorStop(0, `rgba(${lq[0]},${lq[1]},${lq[2]},1.0)`);
+                bG.addColorStop(1, `rgba(${Math.round(lq[0]*0.5)},${Math.round(lq[1]*0.5)},${Math.round(lq[2]*0.5)},1.0)`);
+                ctx.fillStyle = bG;
+                ctx.beginPath(); ctx.roundRect(cx2 - 160, b1Y-32, 320, 64, 32); ctx.fill();
+                ctx.shadowBlur = 0;
+                // Üst parıltı
+                ctx.fillStyle = 'rgba(255,255,255,0.2)';
+                ctx.beginPath(); ctx.roundRect(cx2 - 152, b1Y-30, 304, 26, [22,22,0,0]); ctx.fill();
+                ctx.fillStyle = 'white'; ctx.font = "bold 26px 'Bebas Neue', cursive";
+                ctx.fillText('▶  TEKRAR OYNA', cx2, b1Y + 9);
+                ctx.restore();
+                btnReplay.x = cx2; btnReplay.y = b1Y; btnReplay.w = 320; btnReplay.h = 64; 
+
+                // ANA MENÜ butonu
+                let b2Y = pY + 482;
+                ctx.fillStyle = 'rgba(255,255,255,0.07)';
+                ctx.beginPath(); ctx.roundRect(pX+20, b2Y-24, pW-40, 48, 24); ctx.fill();
+                ctx.strokeStyle = 'rgba(255,255,255,0.15)'; ctx.lineWidth = 1; ctx.stroke();
+                ctx.fillStyle = 'rgba(255,255,255,0.7)'; ctx.font = "18px 'Bebas Neue', cursive";
+                ctx.fillText('ANA MENÜ', cx2, b2Y + 7);
+                btnGameOverMenu.y = b2Y; 
+
+                // BAŞARIMLAR (game-over panelinin altına küçük ikonlar)
+                if (unlockedAchievements.length > 0) {
+                    let aY = pY + pH + 18;
+                    ctx.save();
+                    ctx.textAlign = 'center';
+                    ctx.fillStyle = 'rgba(255,255,255,0.3)';
+                    ctx.font = "11px 'Bebas Neue', cursive";
+                    ctx.fillText('BAŞARIMLAR', canvas.width/2, aY);
+                    let iconSize = 28;
+                    let total = unlockedAchievements.length;
+                    let startX = canvas.width/2 - (total * (iconSize + 4)) / 2 + iconSize/2;
+                    achievementDefs.forEach((def, idx) => {
+                        let isUnlocked = unlockedAchievements.includes(def.id);
+                        let ax = canvas.width/2 - ((achievementDefs.length * (iconSize+4)) / 2) + idx * (iconSize+4) + iconSize/2;
+                        ctx.globalAlpha = isUnlocked ? 1.0 : 0.18;
+                        ctx.fillStyle = isUnlocked ? 'rgba(255,215,0,0.15)' : 'rgba(255,255,255,0.05)';
+                        ctx.beginPath(); ctx.arc(ax, aY + 20, 13, 0, Math.PI*2); ctx.fill();
+                        ctx.font = '16px serif';
+                        ctx.fillText(def.icon, ax, aY + 25);
+                    });
+                    ctx.globalAlpha = 1;
+                    ctx.restore();
+                }
+
+                requestAnimationFrame(draw);
+                return;
+            }
+
+            // Oyun Oynanırken veya Durdurulmuşken Ortak Çizimler (Fizik sadece PLAYING ise güncellenir)
+            if (gameState.state === 'PLAYING') {
+                cameraY += (targetCameraY - cameraY) * 0.1 * dt;
+                
+                // Alt bardağın hareketi
+                if (targetCup.maxSpeed > 0 && !gameState.isTransitioning) {
+                    if (targetCup.speed < targetCup.maxSpeed) {
+                        targetCup.speed += 0.01 * dt;
+                    }
+                    targetCup.x += targetCup.speed * targetCup.dir * dt;
+                    let halfW = targetCup.w / 2;
+                    if (targetCup.x - halfW <= 0) {
+                        targetCup.x = halfW;
+                        targetCup.dir = 1;
+                    } else if (targetCup.x + halfW >= canvas.width) {
+                        targetCup.x = canvas.width - halfW;
+                        targetCup.dir = -1;
+                    }
+                }
+
+                // Sürükleme bitince açıyı sıfıra yumuşatarak çek
+                if (isDragging) {
+                    topCup.angle += (targetAngle - topCup.angle) * 0.15 * dt;
+                } else {
+                    targetAngle = 0;
+                    topCup.angle *= Math.pow(0.88, dt);
+                }
+
+                // Adım 3: Sıvı Akıtma Fiziği
+                let rad = topCup.angle * Math.PI / 180;
+                let tanVal = Math.min(20, Math.abs(Math.tan(rad)));
+                let fillH = (topCup.fill / 100) * topCup.h;
+                let sloshFactor = 0.95;
+                let isSpilling = tanVal > (topCup.h - fillH) / (topCup.w / 2) * sloshFactor;
+
+                if (isSpilling && topCup.fill > 0 && !gameState.isTransitioning) {
+                    let overSpill = Math.min(tanVal - (topCup.h - fillH) / (topCup.w / 2) * sloshFactor, 5);
+                    let pourRate = overSpill * 0.6 + 0.5;
+                    pourRate = clamp(pourRate, 0.7, 2.5);
+
+                    // Tema viskozitesi: Lav/Bal yavaş, Zehir/Gece hızlı dökülür
+                    let _themeIdx = Math.floor((gameState.level - 1) / 5) % themes.length;
+                    let viscosity = themes[_themeIdx].viscosity || 1.0;
+                    pourRate *= viscosity;
+                    
+                    topCup.fill -= pourRate;
+                    if (topCup.fill < 0) topCup.fill = 0;
+
+                    let isRight = topCup.angle > 0;
+                    let localX = isRight ? topCup.w / 2 : -topCup.w / 2;
+                    let localY = -topCup.h / 2;
+                    // PERFORMANS: sin/cos cache — aynı rad için 2 kez hesaplıyordu
+                    let _cosR = Math.cos(rad), _sinR = Math.sin(rad);
+                    let worldX = topCup.x + localX * _cosR - localY * _sinR;
+                    let worldY = topCup.y + localX * _sinR + localY * _cosR;
+
+                    // Gerçekçi sıvı fırlatma (Parabolik Hız): 45 derecede max uzağa fırlar, 
+                    // 90 dereceye yaklaştıkça sıvı fırlamaz, bardağın ağzından dik aşağı dökülür.
+                    let absRad = Math.abs(topCup.angle) * Math.PI / 180;
+                    let angleFactor = Math.sin(absRad * 2) * 14; 
+                    let pVx = (isRight ? 1 : -1) * (angleFactor * 0.07 + pourRate * 0.08);
+                    // POOL: yeni obje yerine pool'dan al
+                    let _newP = particlePool.getStream();
+                    _newP.x = worldX;
+                    _newP.y = worldY;
+                    _newP.vx = pVx;
+                    _newP.vy = -0.3;
+                    _newP.size = Math.min(pourRate * 1.5 + 3, 7);
+                    _newP.active = true;
+                    _newP.amount = pourRate;
+                    _newP.dir = isRight ? 1 : -1;
+                    streamParticles.push(_newP);
+                }
+
+                // Parçacıkları hareket ettir
+                for (let i = 0; i < streamParticles.length; i++) {
+                    let p = streamParticles[i];
+                    if (!p.active) continue;
+
+                    p.vy += 0.4 * dt; // Yerçekimi
+                    p.x += p.vx * dt;
+                    p.y += p.vy * dt;
+
+                    // Magnet tolerans: hassas kontrol.
+                    let magnetTolerance;
+                    if (gameState.level <= 3) magnetTolerance = 9;
+                    else if (gameState.level <= 8) magnetTolerance = 5;
+                    else if (gameState.level <= 15) magnetTolerance = 2;
+                    else magnetTolerance = 0;
+                    
+                    let targetTopY  = targetCup.y - targetCup.h / 2;
+                    let targetBotY  = targetCup.y + targetCup.h / 2;
+                    let targetLeftX = targetCup.x - targetCup.w / 2 - magnetTolerance;
+                    let targetRightX= targetCup.x + targetCup.w / 2 + magnetTolerance;
+                    let targetSurfY = targetCup.y + targetCup.h / 2 - (targetCup.fill / 100) * targetCup.h;
+
+                    let goingRight   = p.vx >= 0;
+                    let targetOnRight= targetCup.x >= topCup.x;
+                    let veryClose    = Math.abs(targetCup.x - topCup.x) < topCup.w * 0.25;
+                    let streamTowardTarget = veryClose || (goingRight === targetOnRight);
+
+                    if (!p.overflowing && streamTowardTarget &&
+                        p.y >= targetTopY - 2 && p.y <= targetSurfY + 8 &&
+                        p.x >= targetLeftX && p.x <= targetRightX) {
+
+                        if (targetCup.fill < 100) {
+                            targetCup.fill += p.amount;
+                            if (targetCup.fill > 100) targetCup.fill = 100;
+                            p.active = false;
+
+                            // Sıvı yüzey Y
+                            let surfaceY = targetCup.y + targetCup.h / 2 - (targetCup.fill / 100) * targetCup.h;
+                            let lqC = currentTheme.liquid;
+
+                            // Splash parçacıkları — hafif, bardağın içinde kalır
+                            let splashCount = 1 + Math.floor(p.amount * 0.8);
+                            for (let s = 0; s < splashCount; s++) {
+                                let ang = -Math.PI * 0.5 + (Math.random() - 0.5) * Math.PI * 0.5;
+                                let spd = 0.8 + Math.random() * 1.4;
+                                // Spawn bardağın içinde
+                                let sx = clamp(p.x + (Math.random() - 0.5) * 4, targetLeftX + 2, targetRightX - 2);
+                                // POOL: splash particle
+                                let _sp = particlePool.getSplash();
+                                _sp.x = sx;
+                                _sp.y = surfaceY;
+                                _sp.vx = Math.cos(ang) * spd;
+                                _sp.vy = Math.sin(ang) * spd;
+                                _sp.alpha = 0.6;
+                                _sp.r = 0.8 + Math.random() * 1.2;
+                                _sp.color = [lqC[0], lqC[1], lqC[2]];
+                                splashParticles.push(_sp);
+                            }
+
+                            // Ripple — POOL
+                            let _rp = particlePool.getRipple();
+                            _rp.x = p.x; _rp.y = surfaceY; _rp.r = 2;
+                            _rp.maxR = 8 + p.amount * 2; _rp.alpha = 0.6;
+                            ripples.push(_rp);
+
+                            if (Math.random() < 0.3) playSplash();
+                            targetCup.waveImpact = Math.min(6, (targetCup.waveImpact || 0) + p.amount * 0.8);
+
+                        } else {
+                            // Bardak dolu: sessizce bardağın kenarından kayar, fırlamaz
+                            p.overflowing = true;
+                            // Hafif yatay itme (sıvının taştığı yön)
+                            let spillDir = (p.x < targetCup.x) ? -1 : 1;
+                            p.vx = spillDir * (0.8 + Math.random() * 0.6);
+                            p.vy = Math.min(p.vy, 1.0); // yukarı fırlatma yok
+                        }
+                    }
+
+                    if (p.y > canvas.height - cameraY + 20) {
+                        // Yere düştü → toplam sıvıdan düş + plob sesi
+                        gameState.totalLiquid = Math.max(0, gameState.totalLiquid - p.amount);
+                        // Spam önlemek için %30 olasılıkla ses çal
+                        if (Math.random() < 0.3) playDropLost();
+                        p.active = false;
+                    }
+                }
+
+                // Temizlik — splice yerine swap-and-pop + pool'a iade
+                for(let i = streamParticles.length - 1; i >= 0; i--) {
+                    if (!streamParticles[i].active) {
+                        particlePool.releaseStream(streamParticles[i]);
+                        streamParticles[i] = streamParticles[streamParticles.length - 1];
+                        streamParticles.pop();
+                    }
+                }
+
+                // Level Up / Game Over kontrolü
+                // Üst bardak boşalınca kontrol
+                if (topCup.fill <= 0 && streamParticles.length === 0 && !gameState.isTransitioning) {
+                    // Azıcık sıvı bile girse (> 0) oyun devam etmeli!
+                    if (targetCup.fill > 0) {
+                        // Level geçişi: toplam sıvı = kalan üst bardak
+                        // topCup bitti, targetCup de doldu — geriye kalan hiç değil
+                        // Gerçek kalan sıvı = totalLiquid (yere dökülmeyen)
+                        levelUp();
+                    } else {
+                        gameState.state = 'GAMEOVER';
+                        gameOverStartTime = Date.now();
+                        stopPourSound();
+                        stopTiltSound();
+                        stopFillNearSound();
+                        stopMusic();
+                        comboCount = 0; comboMultiplier = 1;
+                        playGameOverSound();
+                        adSystem.onGameOver();
+                        if (gameState.score > gameState.highScore) {
+                            gameState.highScore = gameState.score;
+                            gameState.isNewHighScore = true;
+                            localStorage.setItem('pourDownHighScore', gameState.highScore);
+                        } else {
+                            gameState.isNewHighScore = false;
+                        }
+                    }
+                }
+            } // PLAYING IF END
+
+            // Çizim kısmı (Hem PLAYING hem PAUSED state için ortaktır)
+            ctx.save();
+            ctx.translate(0, cameraY);
+            
+            // ── FİZİK TABANLI AKIŞ ANİMASYONU ──
+            let drawRad = topCup.angle * Math.PI / 180;
+            let drawTanVal = Math.min(20, Math.abs(Math.tan(drawRad)));
+            let drawFillH = (topCup.fill / 100) * topCup.h;
+            let sloshFactor = 0.95;
+            let drawIsSpilling = drawTanVal > (topCup.h - drawFillH) / (topCup.w / 2) * sloshFactor;
+            let isSpillingVisually = streamParticles.length > 0 && topCup.fill > 0 && drawIsSpilling;
+
+            // Akan su sesini yönet
+            if (isSpillingVisually && gameState.state === 'PLAYING') startPourSound();
+            else stopPourSound();
+
+            if (pourNoiseNode && pourNoiseNode.setIntensity) {
+                pourNoiseNode.setIntensity(Math.min(1, Math.abs(topCup.angle) / 75));
+            }
+
+            // ─── TİLT SESİ (bardak eğilirken cam sürtünme) ───
+            if (gameState.state === 'PLAYING' && Math.abs(topCup.angle) > 5 && !isSpillingVisually) {
+                startTiltSound();
+                setTiltIntensity(Math.min(1, Math.abs(topCup.angle) / 75));
+            } else {
+                stopTiltSound();
+            }
+
+            // ─── FİLL-NEAR SESİ (alt bardak %85+ olunca gerilim) ───
+            if (gameState.state === 'PLAYING' && targetCup.fill >= 85 && targetCup.fill < 100) {
+                startFillNearSound();
+            } else {
+                stopFillNearSound();
+            }
+
+            // ─── KALP ATIŞI (sıvı bitmek üzere) ───
+            if (gameState.state === 'PLAYING' && gameState.totalLiquid < 30 && gameState.totalLiquid > 0) {
+                heartbeatTimer -= dt;
+                if (heartbeatTimer <= 0) {
+                    playHeartbeat();
+                    // sıvı azaldıkça ritim hızlanır: 30→90 frame, 0→30 frame
+                    heartbeatTimer = 30 + (gameState.totalLiquid / 30) * 60;
+                }
+            }
+
+            // ─── AMBIENT MÜZİK ───
+            if (gameState.state === 'PLAYING' || gameState.state === 'MENU') {
+                startMusic();
+                tickMusic();
+            } else if (gameState.state === 'GAMEOVER') {
+                stopMusic();
+            }
+
+            // ── ŞERİT (POLYLINE) ÇİZİMİ ──
+            // Görsel akış dursa bile, havadaki parçacıkları çizmeye devam et!
+            let activeStreams = streamParticles.filter(p => p.active);
+            
+            if (activeStreams.length > 0) {
+                let drawAbsAngle = Math.abs(topCup.angle);
+                let pourStrength = clamp((drawAbsAngle - 35) / 45, 0, 1);
+                let flowQ = currentTheme.liquid.map(Math.round);
+                
+                // Parçacıkları Y'ye göre sırala (yukarıdan aşağı)
+                let sorted = activeStreams.sort((a, b) => a.y - b.y);
+                
+                // Kopuk akışları (farklı dökme anlarını) ayrı ayrı çizmek için grupla
+                let segments = [];
+                let currentSeg = [sorted[0]];
+                for (let i = 1; i < sorted.length; i++) {
+                    if (sorted[i].y - sorted[i-1].y > 35) { // 35px boşluk varsa akış kopmuştur
+                        segments.push(currentSeg);
+                        currentSeg = [sorted[i]];
+                    } else {
+                        currentSeg.push(sorted[i]);
+                    }
+                }
+                segments.push(currentSeg);
+
+                // Her bir akış grubunu ayrı çiz (birleşip saçma şekiller oluşturmasın)
+                for (let seg of segments) {
+                    if (seg.length >= 2) {
+                        let topW = 4 + pourStrength * 6;
+                        let botW = 1.5;
+                        
+                        ctx.save();
+                        ctx.shadowColor = `rgba(${flowQ[0]},${flowQ[1]},${flowQ[2]},0.6)`;
+                        ctx.shadowBlur = 8;
+                        
+                        ctx.beginPath();
+                        // Sol kenar
+                        for (let i = 0; i < seg.length; i++) {
+                            let p = seg[i];
+                            let t = i / (seg.length - 1);
+                            let w = topW + (botW - topW) * t;
+                            if (i === 0) ctx.moveTo(p.x - w/2, p.y);
+                            else ctx.lineTo(p.x - w/2, p.y);
+                        }
+                        // Sağ kenar
+                        for (let i = seg.length - 1; i >= 0; i--) {
+                            let p = seg[i];
+                            let t = i / (seg.length - 1);
+                            let w = topW + (botW - topW) * t;
+                            ctx.lineTo(p.x + w/2, p.y);
+                        }
+                        ctx.closePath();
+                        
+                        let firstP = seg[0];
+                        let lastP = seg[seg.length - 1];
+                        let sg = ctx.createLinearGradient(0, firstP.y, 0, lastP.y);
+                        sg.addColorStop(0, `rgba(${flowQ[0]},${flowQ[1]},${flowQ[2]},0.95)`);
+                        sg.addColorStop(1, `rgba(${flowQ[0]},${flowQ[1]},${flowQ[2]},0.4)`);
+                        ctx.fillStyle = sg;
+                        ctx.fill();
+                        
+                        ctx.beginPath();
+                        ctx.moveTo(seg[0].x, seg[0].y);
+                        for (let i = 1; i < seg.length; i++) {
+                            ctx.lineTo(seg[i].x, seg[i].y);
+                        }
+                        ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+                        ctx.lineWidth = 1;
+                        ctx.stroke();
+                        ctx.restore();
+
+                        // Yavaş akışta damla kopması (sadece en son parçadan)
+                        if (!window.streamDrops) window.streamDrops = [];
+                        if (isSpillingVisually && pourStrength < 0.5 && Math.random() < 0.3 && seg === segments[segments.length-1]) {
+                            window.streamDrops.push({
+                                x: lastP.x + (Math.random() - 0.5) * 5,
+                                y: lastP.y,
+                                vx: (Math.random() - 0.5) * 1.0,
+                                vy: 1.5 + Math.random() * 2.0,
+                                r: 1.5 + Math.random() * 2.0,
+                                alpha: 0.82,
+                                color: [flowQ[0], flowQ[1], flowQ[2]]
+                            });
+                        }
+                    } else if (seg.length === 1) {
+                        let p = seg[0];
+                        let spd = Math.sqrt(p.vx*p.vx + p.vy*p.vy);
+                        let st  = Math.min(spd * 0.3, 3.5);
+                        ctx.beginPath();
+                        ctx.ellipse(p.x, p.y, p.size*0.9, p.size*0.9 + st, Math.atan2(p.vy, p.vx) - Math.PI/2, 0, Math.PI*2);
+                        ctx.fillStyle = `rgba(${flowQ[0]},${flowQ[1]},${flowQ[2]},0.82)`;
+                        ctx.fill();
+                        ctx.beginPath();
+                        ctx.ellipse(p.x - p.size*0.25, p.y - p.size*0.35, p.size*0.28, p.size*0.28, 0, 0, Math.PI*2);
+                        ctx.fillStyle = `rgba(255,255,255,0.3)`;
+                        ctx.fill();
+                    }
+                }
+            }
+
+            if (isSpillingVisually) {
+                // Başarım: ilk defa döküyorsa
+                checkAchievements('pour_start', null);
+            }
+
+            // Tema renkli damlaları (kopan küçük damlalar) güncelle ve çiz
+            if (!window.streamDrops) window.streamDrops = [];
+            for (let i = window.streamDrops.length - 1; i >= 0; i--) {
+                let d = window.streamDrops[i];
+                d.y  += d.vy * dt;
+                d.vy += 0.25 * dt;
+                d.x  += d.vx * dt;
+                d.alpha -= 0.028 * dt;
+                if (d.alpha <= 0) {
+                    window.streamDrops[i] = window.streamDrops[window.streamDrops.length - 1];
+                    window.streamDrops.pop();
+                    continue;
+                }
+                let dq = d.color.map(Math.round);
+                let stretch = Math.min(d.vy * 0.35, 2.5);
+                ctx.beginPath();
+                ctx.ellipse(d.x, d.y, d.r, d.r + stretch, 0, 0, Math.PI*2);
+                ctx.fillStyle = `rgba(${dq[0]},${dq[1]},${dq[2]},${d.alpha})`;
+                ctx.fill();
+                // İç parıltı
+                ctx.beginPath();
+                ctx.ellipse(d.x - d.r*0.2, d.y - d.r*0.3, d.r*0.3, d.r*0.3, 0, 0, Math.PI*2);
+                ctx.fillStyle = `rgba(255,255,255,${d.alpha*0.4})`;
+                ctx.fill();
+            }
+
+            // --- SPLASH PARÇACIKLARı ---
+            for (let i = splashParticles.length - 1; i >= 0; i--) {
+                let s = splashParticles[i];
+                s.vy += 0.38 * dt; // yerçekimi
+                s.x += s.vx * dt;
+                s.y += s.vy * dt;
+                s.vx *= Math.pow(0.97, dt); // hava direnci
+                s.alpha -= 0.042 * dt;
+                if (s.alpha <= 0) {
+                    particlePool.releaseSplash(s);
+                    splashParticles[i] = splashParticles[splashParticles.length - 1];
+                    splashParticles.pop();
+                    continue;
+                }
+                let sq = s.color.map(Math.round);
+                ctx.beginPath();
+                // Düşerken uzayan damla efekti
+                let speed = Math.sqrt(s.vx*s.vx + s.vy*s.vy);
+                let stretch = Math.min(speed * 0.4, 3);
+                ctx.ellipse(s.x, s.y, s.r, s.r + stretch, Math.atan2(s.vy, s.vx) - Math.PI/2, 0, Math.PI*2);
+                ctx.fillStyle = `rgba(${sq[0]},${sq[1]},${sq[2]},${s.alpha})`;
+                ctx.fill();
+            }
+
+            // --- RIPPLE HALKALARI ---
+            for (let i = ripples.length - 1; i >= 0; i--) {
+                let rip = ripples[i];
+                rip.r += ((rip.maxR - rip.r) * 0.15 + 0.5) * dt;
+                rip.alpha -= 0.055 * dt;
+                if (rip.alpha <= 0) {
+                    particlePool.releaseRipple(rip);
+                    ripples[i] = ripples[ripples.length - 1];
+                    ripples.pop();
+                    continue;
+                }
+                ctx.beginPath();
+                // Yatay elips: sıvı yüzeyinde perspektif hissi
+                ctx.ellipse(rip.x, rip.y, rip.r, rip.r * 0.28, 0, 0, Math.PI*2);
+                ctx.strokeStyle = `rgba(255,255,255,${rip.alpha})`;
+                ctx.lineWidth = 1.2;
+                ctx.stroke();
+                // Sıvı renkli iç halka
+                let rq = currentTheme.liquid.map(Math.round);
+                ctx.beginPath();
+                ctx.ellipse(rip.x, rip.y, rip.r * 0.5, rip.r * 0.14, 0, 0, Math.PI*2);
+                ctx.strokeStyle = `rgba(${rq[0]},${rq[1]},${rq[2]},${rip.alpha * 0.5})`;
+                ctx.lineWidth = 1;
+                ctx.stroke();
+            }
+
+            drawCup(targetCup);
+            drawCup(topCup);
+            
+            // TAMAMLAMA EFEKTLERİ (En üstte çizilir)
+            ctx.lineCap = 'round';
+            
+            // 3. Işık Huzmeleri
+            for (let i = burstLines.length - 1; i >= 0; i--) {
+                let p = burstLines[i];
+                p.y += p.vy * dt;
+                p.alpha -= 0.04 * dt;
+                ctx.beginPath();
+                ctx.moveTo(p.x, p.y);
+                ctx.lineTo(p.x, p.y + p.h);
+                ctx.strokeStyle = `rgba(${Math.round(p.color[0])}, ${Math.round(p.color[1])}, ${Math.round(p.color[2])}, ${p.alpha})`;
+                ctx.lineWidth = 3;
+                ctx.stroke();
+                if (p.alpha <= 0) {
+                    particlePool.releaseBurst(p);
+                    burstLines[i] = burstLines[burstLines.length - 1];
+                    burstLines.pop();
+                }
+            }
+
+            // 4. Parçacık Patlaması
+            for (let i = explosionParticles.length - 1; i >= 0; i--) {
+                let p = explosionParticles[i];
+                p.vy += 0.3 * dt; // Yerçekimi
+                p.x += p.vx * dt;
+                p.y += p.vy * dt;
+                p.alpha -= 0.04 * dt;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, p.r, 0, Math.PI*2);
+                ctx.fillStyle = `rgba(${Math.round(p.color[0])}, ${Math.round(p.color[1])}, ${Math.round(p.color[2])}, ${p.alpha})`;
+                ctx.fill();
+                if (p.alpha <= 0) {
+                    particlePool.releaseExplosion(p);
+                    explosionParticles[i] = explosionParticles[explosionParticles.length - 1];
+                    explosionParticles.pop();
+                }
+            }
+
+            // 5. +SKOR Yazısı
+            for (let i = floatingTexts.length - 1; i >= 0; i--) {
+                let p = floatingTexts[i];
+                p.y -= 2 * dt; // Uçuş hızı
+                p.alpha -= 0.02 * dt;
+                ctx.fillStyle = `rgba(255, 215, 0, ${p.alpha})`; // Altın
+                ctx.font = "bold 36px 'Bebas Neue', cursive";
+                ctx.textAlign = 'center';
+                ctx.shadowColor = `rgba(255, 215, 0, ${p.alpha * 0.5})`;
+                ctx.shadowBlur = 10;
+                ctx.fillText(p.text, p.x, p.y);
+                ctx.shadowBlur = 0; // Sıfırla
+                if (p.alpha <= 0) {
+                    particlePool.releaseFloat(p);
+                    floatingTexts[i] = floatingTexts[floatingTexts.length - 1];
+                    floatingTexts.pop();
+                }
+            }
+
+            ctx.restore();
+
+            // --- TUTORIAL HİNTİ (Level 1) ---
+            if (gameState.level === 1 && tutorialTimer > 0 && !gameState.isTransitioning) {
+                // Eğim başlayınca hızla söner
+                if (Math.abs(topCup.angle) > 8) tutorialTimer = Math.min(tutorialTimer, 45);
+                tutorialTimer--;
+                let tAlpha = Math.min(1, tutorialTimer / 40);
+
+                let hx = canvas.width / 2;
+                let hy = topCup.y - topCup.h / 2 - 50;
+                let bounce = Math.sin(Date.now() * 0.004) * 5;
+
+                ctx.save();
+                ctx.globalAlpha = tAlpha;
+                ctx.textAlign = 'center';
+
+                // Sol ok
+                ctx.fillStyle = 'rgba(255,255,255,0.9)';
+                ctx.font = "bold 26px 'Bebas Neue', cursive";
+                ctx.fillText('←', hx - 55 + bounce, hy);
+
+                // İpucu yazısı
+                ctx.fillStyle = 'rgba(255,255,255,0.75)';
+                ctx.font = "14px 'Bebas Neue', cursive";
+                ctx.fillText('Sürükle', hx, hy + 1);
+
+                // Sağ ok
+                ctx.fillStyle = 'rgba(255,255,255,0.9)';
+                ctx.font = "bold 26px 'Bebas Neue', cursive";
+                ctx.fillText('→', hx + 55 - bounce, hy);
+
+                ctx.fillStyle = 'rgba(255,255,255,0.45)';
+                ctx.font = "12px 'Bebas Neue', cursive";
+                ctx.fillText('bardağı eğilt, sıvıyı dök', hx, hy + 20);
+                ctx.restore();
+            }
+
+            // --- OYUN İÇİ HUD (Level & Skor) ---
+            let hudY = 30;
+            let hudH = 32;
+            let lqHUD = currentTheme.liquid.map(Math.round);
+
+            // 1. Level Badge (Sol)
+            let lvlX = 18;
+            ctx.save();
+            ctx.fillStyle = 'rgba(0,0,0,0.4)';
+            ctx.beginPath(); ctx.roundRect(lvlX, hudY - 14, 85, hudH, 6); ctx.fill();
+            ctx.strokeStyle = `rgba(${lqHUD[0]},${lqHUD[1]},${lqHUD[2]},0.4)`;
+            ctx.lineWidth = 1.5; ctx.stroke();
+            // Accent line
+            ctx.fillStyle = `rgba(${lqHUD[0]},${lqHUD[1]},${lqHUD[2]},0.8)`;
+            ctx.fillRect(lvlX, hudY - 14, 3, hudH);
+            
+            ctx.fillStyle = 'white'; ctx.font = "bold 14px 'Bebas Neue', cursive"; ctx.textAlign = 'left';
+            ctx.fillText('LEVEL ' + gameState.level, lvlX + 10, hudY + 7);
+            ctx.restore();
+
+            // 2. Score Badge (Orta)
+            let scrW = 100;
+            let scrX = canvas.width / 2 - scrW / 2;
+            ctx.save();
+            ctx.fillStyle = 'rgba(0,0,0,0.4)';
+            ctx.beginPath(); ctx.roundRect(scrX, hudY - 14, scrW, hudH, 6); ctx.fill();
+            ctx.strokeStyle = 'rgba(255,255,255,0.15)'; ctx.lineWidth = 1; ctx.stroke();
+            // Puan parlaması (üstten ince çizgi)
+            ctx.fillStyle = 'rgba(255,255,255,0.08)';
+            ctx.fillRect(scrX + 5, hudY - 12, scrW - 10, 1);
+
+            ctx.fillStyle = 'rgba(255,255,255,0.6)'; ctx.font = "11px 'Bebas Neue', cursive"; ctx.textAlign = 'center';
+            ctx.fillText('SKOR', canvas.width/2, hudY - 1);
+            // Skor zıplama animasyonu
+            window.scorePulse = window.scorePulse || 1;
+            window.scorePulse += (1 - window.scorePulse) * 0.15;
+            ctx.save();
+            ctx.translate(canvas.width/2, hudY + 14);
+            ctx.scale(window.scorePulse, window.scorePulse);
+            ctx.fillStyle = window.scorePulse > 1.05 ? '#ffd700' : 'white';
+            ctx.font = "bold 18px 'Bebas Neue', cursive";
+            ctx.fillText(gameState.score, 0, 0);
+            ctx.restore();
+            ctx.restore();
+
+            // 3. Kombo Rozeti (Sağ üst) — sadece kombo varken görünür
+            if (comboCount >= 2) {
+                let ct = Date.now() / 1000;
+                let pulse = 0.85 + Math.sin(ct * 6) * 0.15;
+                let cbX = canvas.width - 18;
+                let cbColors = comboCount >= 5 ? [255,80,80] : comboCount >= 3 ? [255,160,20] : [255,215,0];
+                let cbLabel = comboCount >= 5 ? '🔥' : comboCount >= 3 ? '⚡' : '✨';
+                ctx.save();
+                ctx.globalAlpha = pulse;
+                ctx.fillStyle = `rgba(${cbColors[0]},${cbColors[1]},${cbColors[2]},0.18)`;
+                ctx.beginPath(); ctx.roundRect(cbX - 68, hudY - 14, 70, hudH, 6); ctx.fill();
+                ctx.strokeStyle = `rgba(${cbColors[0]},${cbColors[1]},${cbColors[2]},0.7)`;
+                ctx.lineWidth = 1.5; ctx.stroke();
+                ctx.fillStyle = `rgb(${cbColors[0]},${cbColors[1]},${cbColors[2]})`;
+                ctx.font = "bold 13px 'Bebas Neue', cursive"; ctx.textAlign = 'right';
+                ctx.fillText(`${cbLabel} x${comboMultiplier}`, cbX - 4, hudY + 8);
+                ctx.restore();
+            }
+
+            // --- SIVI HUD ÇUBUĞU — Alt Bardak Dolum İlerlemesi ---
+            {
+                let bX = 14, bY = 80, bW = 12, bH = 180;
+                // targetCup.fill: alt bardağın doluluk oranı (0-100)
+                let liqPct = clamp(gameState.totalLiquid / 100, 0, 1);
+                let lq = currentTheme.liquid.map(Math.round);
+                let isLow = gameState.totalLiquid < 20;
+                let t = Date.now();
+
+                // Arka plan
+                ctx.fillStyle = 'rgba(0,0,0,0.45)';
+                ctx.beginPath();
+                ctx.roundRect(bX, bY, bW, bH, bW / 2);
+                ctx.fill();
+
+                // Dolum (clip ile yuvarlatma)
+                if (liqPct > 0) {
+                    ctx.save();
+                    ctx.beginPath();
+                    ctx.roundRect(bX, bY, bW, bH, bW / 2);
+                    ctx.clip();
+                    let fillH = bH * liqPct;
+                    let fillY = bY + bH - fillH;
+                    let barGrad = ctx.createLinearGradient(0, fillY, 0, bY + bH);
+                    if (isLow) {
+                        barGrad.addColorStop(0, 'rgba(255,80,80,0.95)');
+                        barGrad.addColorStop(1, 'rgba(180,20,20,0.8)');
+                    } else {
+                        barGrad.addColorStop(0, `rgba(${lq[0]},${lq[1]},${lq[2]},1)`);
+                        barGrad.addColorStop(1, `rgba(${lq[0]},${lq[1]},${lq[2]},0.5)`);
+                    }
+                    ctx.fillStyle = barGrad;
+                    ctx.fillRect(bX, fillY, bW, fillH);
+                    ctx.fillStyle = 'rgba(255,255,255,0.1)';
+                    ctx.fillRect(bX + 2, fillY + 2, 3, Math.max(0, fillH - 4));
+                    ctx.restore();
+                }
+
+                // Kenar
+                let borderAlpha = isLow ? 0.45 + Math.sin(t * 0.01) * 0.3 : 0.25;
+                ctx.strokeStyle = isLow ? `rgba(255,100,100,${borderAlpha})` : 'rgba(255,255,255,0.25)';
+                ctx.lineWidth = 1.5;
+                ctx.beginPath();
+                ctx.roundRect(bX, bY, bW, bH, bW / 2);
+                ctx.stroke();
+
+                // Yüzde / etiket
+                ctx.fillStyle = isLow ? 'rgba(255,120,120,0.9)' : 'rgba(255,255,255,0.5)';
+                ctx.font = "10px 'Bebas Neue', cursive";
+                ctx.textAlign = 'center';
+                ctx.fillText(Math.round(gameState.totalLiquid) + '%', bX + bW / 2, bY + bH + 14);
+
+                // Low liquid warning vignette
+                if (isLow) {
+                    let warnAlpha = 0.06 + Math.sin(Date.now() * 0.015) * 0.05;
+                    let warnGrad = ctx.createRadialGradient(0, canvas.height/2, 0, 0, canvas.height/2, 180);
+                    warnGrad.addColorStop(0, `rgba(220,30,30,${warnAlpha * 2})`);
+                    warnGrad.addColorStop(1, 'rgba(0,0,0,0)');
+                    ctx.fillStyle = warnGrad;
+                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+                }
+                        }
+
+            // UI - Pause Butonu
+            ctx.beginPath();
+            ctx.arc(btnPause.x, btnPause.y, btnPause.r, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(255,255,255,0.2)';
+            ctx.fill();
+            ctx.fillStyle = 'white';
+            ctx.fillRect(btnPause.x - 6, btnPause.y - 6, 4, 12);
+            ctx.fillRect(btnPause.x + 2, btnPause.y - 6, 4, 12);
+
+            if (gameState.state === 'PAUSED') {
+                // Koyu overlay (GameOver ile aynı)
+                ctx.fillStyle = 'rgba(0,0,0,0.78)';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                let lqP = currentTheme.liquid.map(Math.round);
+                let cx3 = canvas.width / 2;
+                let pX = 55, pW = canvas.width - 110, pH = 370;
+                let pY = canvas.height / 2 - pH / 2;
+
+                // Panel
+                ctx.fillStyle = 'rgba(8,18,35,0.95)';
+                ctx.beginPath(); ctx.roundRect(pX, pY, pW, pH, 22); ctx.fill();
+                ctx.strokeStyle = 'rgba(255,255,255,0.1)'; ctx.lineWidth = 1.5;
+                ctx.beginPath(); ctx.roundRect(pX, pY, pW, pH, 22); ctx.stroke();
+
+                // Üst renk çizgisi (tema rengi)
+                let acG2 = ctx.createLinearGradient(pX, 0, pX + pW, 0);
+                acG2.addColorStop(0, 'transparent');
+                acG2.addColorStop(0.3, `rgba(${lqP[0]},${lqP[1]},${lqP[2]},0.9)`);
+                acG2.addColorStop(0.7, `rgba(${lqP[0]},${lqP[1]},${lqP[2]},0.9)`);
+                acG2.addColorStop(1, 'transparent');
+                ctx.strokeStyle = acG2; ctx.lineWidth = 2.5;
+                ctx.beginPath(); ctx.moveTo(pX + 22, pY); ctx.lineTo(pX + pW - 22, pY); ctx.stroke();
+
+                ctx.textAlign = 'center';
+
+                // Başlık
+                ctx.save();
+                ctx.shadowColor = `rgba(${lqP[0]},${lqP[1]},${lqP[2]},0.8)`; ctx.shadowBlur = 18;
+                ctx.fillStyle = 'white'; ctx.font = "bold 32px 'Bebas Neue', cursive";
+                ctx.fillText('DURAKLATILDI', cx3, pY + 58);
+                ctx.restore();
+
+                // Level / Skor bilgisi
+                ctx.fillStyle = 'rgba(255,255,255,0.45)'; ctx.font = "15px 'Bebas Neue', cursive";
+                ctx.fillText('Level ' + gameState.level + '  •  Skor: ' + gameState.score, cx3, pY + 90);
+
+                // Ayraç
+                ctx.strokeStyle = 'rgba(255,255,255,0.07)'; ctx.lineWidth = 1;
+                ctx.beginPath(); ctx.moveTo(pX+20, pY+108); ctx.lineTo(pX+pW-20, pY+108); ctx.stroke();
+
+                // DEVAM ET butonu
+                let r1Y = pY + 155;
+                let rG = ctx.createLinearGradient(0, r1Y-28, 0, r1Y+28);
+                rG.addColorStop(0, `rgba(${lqP[0]},${lqP[1]},${lqP[2]},0.95)`);
+                rG.addColorStop(1, `rgba(${Math.round(lqP[0]*0.55)},${Math.round(lqP[1]*0.55)},${Math.round(lqP[2]*0.55)},0.95)`);
+                ctx.fillStyle = rG;
+                ctx.beginPath(); ctx.roundRect(pX+16, r1Y-26, pW-32, 52, 26); ctx.fill();
+                ctx.fillStyle = 'white'; ctx.font = "bold 20px 'Bebas Neue', cursive";
+                ctx.fillText('▶  DEVAM ET', cx3, r1Y + 7);
+                btnResume.y = r1Y;
+
+                // TEKRAR OYNA butonu (yeni)
+                let rrY = pY + 215;
+                ctx.fillStyle = 'rgba(255,180,80,0.13)';
+                ctx.beginPath(); ctx.roundRect(pX+16, rrY-22, pW-32, 44, 22); ctx.fill();
+                ctx.strokeStyle = 'rgba(255,180,80,0.5)'; ctx.lineWidth = 1.2; ctx.stroke();
+                ctx.fillStyle = 'rgba(255,210,120,1)'; ctx.font = "17px 'Bebas Neue', cursive";
+                ctx.fillText('🔄  TEKRAR OYNA', cx3, rrY + 6);
+
+                // ANA MENÜ butonu
+                let r2Y = pY + 270;
+                ctx.fillStyle = 'rgba(255,255,255,0.07)';
+                ctx.beginPath(); ctx.roundRect(pX+16, r2Y-22, pW-32, 44, 22); ctx.fill();
+                ctx.strokeStyle = 'rgba(255,255,255,0.15)'; ctx.lineWidth = 1; ctx.stroke();
+                ctx.fillStyle = 'rgba(255,255,255,0.7)'; ctx.font = "17px 'Bebas Neue', cursive";
+                ctx.fillText('🏠  ANA MENÜ', cx3, r2Y + 6);
+
+                // SES + MÜZİK TOGGLE BUTONLARI
+                let togY = pY + pH - 36;
+                let toggleR = 22;
+                let togSoundX = cx3 - 38;
+                let togMusicX = cx3 + 38;
+
+                // Ses toggle
+                ctx.beginPath();
+                ctx.arc(togSoundX, togY, toggleR, 0, Math.PI*2);
+                ctx.fillStyle = gameState.soundEnabled ? `rgba(${lqP[0]},${lqP[1]},${lqP[2]},0.22)` : 'rgba(255,255,255,0.05)';
+                ctx.fill();
+                ctx.strokeStyle = gameState.soundEnabled ? `rgba(${lqP[0]},${lqP[1]},${lqP[2]},0.7)` : 'rgba(255,255,255,0.2)';
+                ctx.lineWidth = 1.5; ctx.stroke();
+                ctx.fillStyle = 'white'; ctx.font = "18px 'Bebas Neue', cursive"; ctx.textAlign = 'center';
+                ctx.fillText(gameState.soundEnabled ? '🔊' : '🔇', togSoundX, togY + 6);
+
+                // Müzik toggle
+                ctx.beginPath();
+                ctx.arc(togMusicX, togY, toggleR, 0, Math.PI*2);
+                ctx.fillStyle = gameState.musicEnabled ? `rgba(${lqP[0]},${lqP[1]},${lqP[2]},0.22)` : 'rgba(255,255,255,0.05)';
+                ctx.fill();
+                ctx.strokeStyle = gameState.musicEnabled ? `rgba(${lqP[0]},${lqP[1]},${lqP[2]},0.7)` : 'rgba(255,255,255,0.2)';
+                ctx.lineWidth = 1.5; ctx.stroke();
+                ctx.fillStyle = 'white';
+                ctx.fillText('🎵', togMusicX, togY + 6);
+                if (!gameState.musicEnabled) {
+                    ctx.strokeStyle = 'rgba(255,80,80,0.95)';
+                    ctx.lineWidth = 2.5;
+                    ctx.beginPath();
+                    ctx.moveTo(togMusicX - 13, togY - 13);
+                    ctx.lineTo(togMusicX + 13, togY + 13);
+                    ctx.stroke();
+                }
+
+                // Buton pozisyonları kaydet
+                btnResume.x = cx3; btnResume.y = r1Y; btnResume.w = pW-32; btnResume.h = 52;
+                btnReplayPause = { x: cx3, y: rrY, w: pW-32, h: 44 };
+                btnMainMenu.x = cx3; btnMainMenu.y = r2Y; btnMainMenu.w = pW-32; btnMainMenu.h = 44;
+                btnSoundToggle = { x: togSoundX, y: togY, r: toggleR };
+                btnMusicToggle = { x: togMusicX, y: togY, r: toggleR };
+            }
+
+            // ─── TEMA GEÇİŞİ FLASH + İSİM ───
+            if (themeFlashTimer > 0) {
+                let alpha = themeFlashTimer / 60 * 0.5;
+                ctx.fillStyle = `rgba(255,255,255,${alpha})`;
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                themeFlashTimer--;
+            }
+            if (themeAnnounceTimer > 0 && themeAnnounceData) {
+                let t = themeAnnounceTimer;
+                let alpha = t > 90 ? (120 - t) / 30 : (t < 30 ? t / 30 : 1);
+                let scale = t > 100 ? 1.5 - (t - 100) * 0.025 : 1;
+                ctx.save();
+                ctx.globalAlpha = alpha;
+                ctx.translate(canvas.width / 2, canvas.height / 2 - 60);
+                ctx.scale(scale, scale);
+                // Glow background
+                let lq = currentTheme.liquid.map(Math.round);
+                ctx.fillStyle = `rgba(${lq[0]},${lq[1]},${lq[2]},0.18)`;
+                ctx.beginPath(); ctx.roundRect(-130, -42, 260, 84, 16); ctx.fill();
+                ctx.strokeStyle = `rgba(${lq[0]},${lq[1]},${lq[2]},0.9)`;
+                ctx.lineWidth = 2; ctx.stroke();
+                // İkon
+                ctx.font = '38px serif';
+                ctx.textAlign = 'center';
+                ctx.fillStyle = 'white';
+                ctx.fillText(themeAnnounceData.icon, 0, -2);
+                // İsim
+                ctx.font = "bold 22px 'Bebas Neue', cursive";
+                ctx.fillStyle = `rgb(${lq[0]},${lq[1]},${lq[2]})`;
+                ctx.fillText(themeAnnounceData.name + ' MODU', 0, 28);
+                ctx.restore();
+                themeAnnounceTimer--;
+            }
+
+            // ─── COMBO POPUPS RENDER ───
+            for (let i = comboPopups.length - 1; i >= 0; i--) {
+                let cp = comboPopups[i];
+                cp.timer--;
+                cp.scale += (1 - cp.scale) * 0.1;
+                let yOffset = (100 - cp.timer) * cp.vy;
+                let alpha = cp.timer > 80 ? (100 - cp.timer) / 20 : (cp.timer < 20 ? cp.timer / 20 : 1);
+                if (cp.timer <= 0) {
+                    comboPopups[i] = comboPopups[comboPopups.length - 1];
+                    comboPopups.pop();
+                    continue;
+                }
+                ctx.save();
+                ctx.globalAlpha = alpha;
+                ctx.translate(canvas.width/2, canvas.height/2 - 40 + yOffset);
+                let popScale = cp.timer > 90 ? 1.5 - (cp.timer - 90) * 0.05 : 1;
+                ctx.scale(popScale, popScale);
+                ctx.shadowColor = `rgba(${cp.color[0]},${cp.color[1]},${cp.color[2]},0.8)`;
+                ctx.shadowBlur = 25;
+                ctx.fillStyle = `rgb(${cp.color[0]},${cp.color[1]},${cp.color[2]})`;
+                ctx.font = "bold 38px 'Bebas Neue', cursive";
+                ctx.textAlign = 'center';
+                ctx.fillText(cp.text, 0, 0);
+                if (cp.subtext) {
+                    ctx.shadowBlur = 0;
+                    ctx.font = "16px 'Bebas Neue', cursive";
+                    ctx.fillStyle = 'rgba(255,255,255,0.9)';
+                    ctx.fillText(cp.subtext, 0, 24);
+                }
+                ctx.restore();
+            }
+
+            // Toast bildirimi (tüm state'lerde üstte göster)
+            if (gameState.state !== 'MENU') drawToast();
+
+            // ─── DEBUG FPS Overlay ───
+            // Aktivasyon: localStorage.setItem('pourDownDebug','true') sonra sayfa yenile
+            if (localStorage.getItem('pourDownDebug') === 'true') {
+                ctx.save();
+                ctx.fillStyle = 'rgba(0,0,0,0.6)';
+                ctx.fillRect(canvas.width - 90, canvas.height - 38, 80, 28);
+                ctx.fillStyle = _currentFps >= 55 ? '#7CFC00' : (_currentFps >= 40 ? '#FFD700' : '#FF4500');
+                ctx.font = "bold 14px monospace";
+                ctx.textAlign = 'left';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(_currentFps + ' FPS', canvas.width - 80, canvas.height - 24);
+                ctx.restore();
+            }
+
+            requestAnimationFrame(draw);
+        }
+
+        requestAnimationFrame(draw);
+    </script>
+<script>
+    if ('serviceWorker' in navigator) {
+        window.addEventListener('load', function() {
+            navigator.serviceWorker.register('./service-worker.js')
+                .then(function(reg) { console.log('[SW] Kayit basarili:', reg.scope); })
+                .catch(function(err) { console.warn('[SW] Kayit basarisiz:', err); });
+        });
+    }
+</script>
+</body>
+</html>
