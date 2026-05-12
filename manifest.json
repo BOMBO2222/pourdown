@@ -2,7 +2,7 @@
   "name": "Pour Down — Bardağı Eğilt, Sıvıyı Dök!",
   "short_name": "Pour Down",
   "description": "Bardağı eğilterek alt bardaca sıvı dök. Kaç tura dayanabilirsin?",
-  "start_url": "./pourdown_v1_perf_fix_1.html",
+  "start_url": "./index.html",
   "scope": "./",
   "display": "fullscreen",
   "orientation": "portrait",
