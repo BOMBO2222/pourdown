@@ -53,70 +53,6 @@
         const ctx = canvas.getContext('2d');
 
         // ============================================================
-        //  DPR (Device Pixel Ratio) — GÜVENLİ ADAPTIF YÜKSEK ÇÖZÜNÜRLÜK
-        // ============================================================
-        // Sorun: Mobilde canvas yüksek çözünürlüklü ekranda bulanık görünür.
-        // Yaklaşım: Canvas internal piksel boyutunu büyüt, CSS ile mantıksal boyutta tut,
-        //           her frame başında ctx.setTransform ile DPR scale'i UYUMLU TUT.
-        //           Hiçbir property override etmiyoruz - sadece transform işliyor.
-        
-        const _LOGICAL_W = 390;  // oyun kodunun bildiği mantıksal genişlik
-        const _LOGICAL_H = 844;  // oyun kodunun bildiği mantıksal yükseklik
-        
-        // DPR seçimi: cihazın gerçek pixel ratio'su, maks 2 ile sınırlı
-        // (2'den fazla görsel kazanç yok ama performans cezası büyük)
-        const _DEVICE_DPR = Math.min(2, window.devicePixelRatio || 1);
-        let _activeDPR = _DEVICE_DPR;
-        
-        // Canvas'ın internal piksel buffer'ını DPR ile büyüt
-        function setupCanvasDPR(dpr) {
-            _activeDPR = dpr;
-            // Internal buffer büyür (gerçek piksel sayısı)
-            canvas.width = Math.round(_LOGICAL_W * dpr);
-            canvas.height = Math.round(_LOGICAL_H * dpr);
-            // CSS boyutu mantıksal piksel (görünür boyut değişmez)
-            canvas.style.width = _LOGICAL_W + 'px';
-            canvas.style.height = _LOGICAL_H + 'px';
-        }
-        
-        // İlk kurulum
-        setupCanvasDPR(_DEVICE_DPR);
-        
-        // Oyun kodunda canvas.width/height kullanan yerler internal buffer'a değil,
-        // mantıksal değere bakmalı. Bu yüzden override ediyoruz.
-        // ÖNEMLI: configurable: true ile, daha sonra tarayıcı set ederse çakışma olmasın
-        try {
-            Object.defineProperty(canvas, 'width', {
-                get() { return _LOGICAL_W; },
-                set(v) { /* eski oyun kodu set etmeye çalışırsa yoksay */ },
-                configurable: true
-            });
-            Object.defineProperty(canvas, 'height', {
-                get() { return _LOGICAL_H; },
-                set(v) { /* yoksay */ },
-                configurable: true
-            });
-        } catch(e) {
-            // Eğer override başarısız olursa DPR'ı kapat, kullanıcı bulanık ama çalışan oyun görsün
-            console.warn('[DPR] property override başarısız, DPR kapatılıyor', e);
-            _activeDPR = 1;
-            canvas.width = _LOGICAL_W;
-            canvas.height = _LOGICAL_H;
-            canvas.style.width = _LOGICAL_W + 'px';
-            canvas.style.height = _LOGICAL_H + 'px';
-        }
-        
-        // KRİTİK: Her frame başında transform'u yeniden uygula.
-        // Bu sayede bir yerde sıfırlansa bile bir sonraki frame'de düzelir.
-        // ctx.save/restore zincirleri içinde kalmayacak (kontrol bizde).
-        function applyDPRTransform() {
-            ctx.setTransform(_activeDPR, 0, 0, _activeDPR, 0, 0);
-        }
-        
-        // Başlangıçta da uygula (ilk birkaç çizim için)
-        applyDPRTransform();
-
-        // ============================================================
         //  REKLAM SİSTEMİ (AdMob / Web Interstitial placeholder)
         //  Gerçek SDK entegrasyonunda bu fonksiyonları override et.
         // ============================================================
@@ -2240,12 +2176,6 @@
             let nowTime = performance.now();
             dt = Math.min(2.5, (nowTime - lastFrameTime) / 8.33);
             lastFrameTime = nowTime;
-            
-            // DPR transform'u her frame başında uygula.
-            // Oyun kodunda ctx.save/restore zincirleri var, identity transform'a dönülebilir.
-            // Bu satır her frame'de sıfırdan transform'u DPR×DPR olarak ayarlar.
-            // Hiçbir save/restore içinde değil, en üst seviyede.
-            ctx.setTransform(_activeDPR, 0, 0, _activeDPR, 0, 0);
 
             // ─── PERFORMANS: FPS sayımı + Adaptive ambient ───
             _fpsFrameCount++;
