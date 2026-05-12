@@ -42,6 +42,9 @@
             max-width: 100%;
             max-height: 100%;
             object-fit: contain;
+            /* PERF/UX: DPR sistemiyle canvas içsel boyut DPR×390/844 olacak,
+               CSS bu mantıksal boyutu koruyacak (görsel olarak 390x844 görünür) */
+            image-rendering: auto;
         }
     </style>
 </head>
@@ -51,6 +54,81 @@
     <script>
         const canvas = document.getElementById('c');
         const ctx = canvas.getContext('2d');
+
+        // ============================================================
+        //  DPR (Device Pixel Ratio) — AKILLI ADAPTIF YÜKSEK ÇÖZÜNÜRLÜK
+        // ============================================================
+        // Sorun: Mobilde canvas yüksek çözünürlüklü ekranda bulanık görünür.
+        // Çözüm: Canvas içsel piksel sayısını DPR ile çarpıp ctx.scale() ile düzelt.
+        // Kod canvas.width'i hep 390 sanmaya devam eder (mantıksal pikseller).
+        // Performans için FPS'e göre 1.0/1.5/2.0 arası adapte eder.
+        
+        const _LOGICAL_W = 390;
+        const _LOGICAL_H = 844;
+        let _currentDPR = 1.0;  // başlangıçta DPR 1 (hızlı), FPS ölçüldükten sonra ayarlanır
+        let _dprApplied = false; // bir kere ayarlandıktan sonra tekrar tekrar değiştirmiyoruz
+        
+        // canvas.width / .height'ı gerçek piksel sayısı yapar ama CSS hep 390x844 görünür
+        function applyDPR(targetDPR) {
+            // Cihazın gerçek piksel ratio'su (maks 3 ile sınırlayalım, 4K telefonlar var)
+            const realDPR = Math.min(3, window.devicePixelRatio || 1);
+            // Talep edilen DPR + cihazın gerçek DPR'ı: ikisinin minimumu
+            // (cihaz 2x ise 2 yeterli; biz 2 istedik ama cihaz sadece 1.5 destekliyorsa 1.5 olur)
+            const dpr = Math.min(targetDPR, realDPR);
+            
+            // Canvas içsel piksel sayısı = mantıksal × dpr
+            canvas.width = Math.round(_LOGICAL_W * dpr);
+            canvas.height = Math.round(_LOGICAL_H * dpr);
+            // CSS boyutu mantıksal piksel (görsel olarak aynı kalır)
+            canvas.style.width = _LOGICAL_W + 'px';
+            canvas.style.height = _LOGICAL_H + 'px';
+            
+            // Tüm çizimleri DPR oranında ölçeklendir.
+            // Önemli: setTransform kullanıyoruz, böylece tekrar tekrar uygulansa da birikmez.
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            
+            _currentDPR = dpr;
+            
+            // canvas.width/height artık fiziksel piksel sayısı dönüyor.
+            // Eski kod canvas.width = 390 sanıyor. Bunu sahte yapmak için getter override edebilirdik
+            // ama riskli; bunun yerine her yerde _LOGICAL_W kullanılması gereken yerler kalsın,
+            // ve mevcut kod ile canvas.width arasında tutarlılık için iki property override edelim.
+        }
+        
+        // İlk başta DPR 1 ile başla (FPS ölçümü yapılana kadar güvenli)
+        applyDPR(1.0);
+        
+        // canvas.width/.height eski kod için 390/844 dönmeli — getter ile sahte yapalım.
+        // Bu, oyun kodundaki yüzlerce canvas.width referansını değiştirmemizi engeller.
+        Object.defineProperty(canvas, 'width', {
+            get: function() { return _LOGICAL_W; },
+            set: function(v) { /* dış kod set etmeye çalışırsa sessizce yoksay */ },
+            configurable: true
+        });
+        Object.defineProperty(canvas, 'height', {
+            get: function() { return _LOGICAL_H; },
+            set: function(v) { /* dış kod set etmeye çalışırsa sessizce yoksay */ },
+            configurable: true
+        });
+        
+        // FPS ölçümünden sonra çağrılır: cihaz hızına göre DPR'ı yükseltir
+        function maybeUpgradeDPR(measuredFps) {
+            if (_dprApplied) return; // bir kere yaptık, tekrar tekrar değiştirmiyoruz (titremesin)
+            
+            let targetDPR;
+            if (measuredFps >= 55) {
+                targetDPR = 2.0; // güçlü cihaz, tam keskinlik
+            } else if (measuredFps >= 40) {
+                targetDPR = 1.5; // orta cihaz, dengeli
+            } else {
+                targetDPR = 1.0; // zayıf cihaz, mevcut performans korunur
+            }
+            
+            // PC'lerde devicePixelRatio genellikle 1, mobile 2-3 olur.
+            // PC'de zaten 1 olduğu için yükseltsek de fark olmaz, gereksiz iş olmaz.
+            applyDPR(targetDPR);
+            _dprApplied = true;
+        }
 
         // ============================================================
         //  REKLAM SİSTEMİ (AdMob / Web Interstitial placeholder)
@@ -283,6 +361,7 @@
         // Menü Butonları Alanları
         const btnPlay = { x: 195, y: 550, w: 220, h: 80 }; // Daha büyük Oyna butonu
         const btnSound = { x: 350, y: 35, r: 20 }; // Ana Menü Ses Butonu
+        const btnMusic = { x: 302, y: 35, r: 20 }; // Ana Menü Müzik Butonu (sesin solunda)
         const btnPause = { x: 350, y: 35, r: 20 };
         const btnResume = { x: 195, y: 380, w: 160, h: 60 };
         const btnMainMenu = { x: 195, y: 470, w: 160, h: 60 };
@@ -376,6 +455,22 @@
         let _currentFps = 60;
         let _fpsHistory = [60, 60, 60];
         let _ambientParticleTarget = 50;
+
+        // ─── PERFORMANS: Mobil cihaz tespiti ───
+        // Mobil/tablette pahalı efektleri azalt; PC/masaüstünde tam kaliteyle çalış.
+        // Aynı kodda 2 görsel kalite yok — sadece görsel olarak FARK EDİLMEZ optimizasyonlar yapıyoruz.
+        const _isMobile = (function() {
+            // Hem user-agent hem touch destekli + dar ekran kontrolü
+            const ua = (navigator.userAgent || '').toLowerCase();
+            const uaMatch = /android|iphone|ipad|ipod|mobile|tablet/.test(ua);
+            const touchMatch = (navigator.maxTouchPoints || 0) > 1;
+            const screenMatch = Math.min(window.innerWidth, window.innerHeight) < 900;
+            return uaMatch || (touchMatch && screenMatch);
+        })();
+        // Mobilde dalga örnekleme adımı: 2px yerine 4px (görsel olarak fark edilmez, hesap %50 azalır)
+        const _waveStep = _isMobile ? 4 : 2;
+        // Mobilde shadowBlur değerleri yarıya iner (mobil ekranda 15 ile 7 fark edilmez)
+        const _shadowScale = _isMobile ? 0.5 : 1.0;
 
         // Oyun içi atmosfer parçacıkları (arka plan)
         const ambientParticles = [];
@@ -1122,17 +1217,26 @@
             topCup.shape = topNewShape;
             targetCup.shape = targetNewShape;
 
-            // Hareket hızı: Çok daha yavaş ve dengeli artış
+            // Hareket hızı: Dengeli artış - ilk leveller daha akıcı, ileri leveller fırlamayan kontrollü artış
             if (gameState.level === 1) {
+                // Level 1: hareket yok, kullanıcı öğreniyor
                 targetCup.maxSpeed = 0;
                 targetCup.speed = 0;
             } else if (gameState.level <= 5) {
-                targetCup.maxSpeed = (gameState.level - 1) * 0.08;
-                targetCup.speed = targetCup.maxSpeed * 0.33;
+                // Level 2-5: hızlı başlangıç, eğlenceli ritim
+                // Level 2 = 0.30, Level 3 = 0.40, Level 4 = 0.50, Level 5 = 0.60
+                targetCup.maxSpeed = 0.20 + (gameState.level - 1) * 0.10;
+                targetCup.speed = targetCup.maxSpeed * 0.5;
+            } else if (gameState.level <= 15) {
+                // Level 6-15: yumuşak artış (her level +0.06)
+                // Level 6 = 0.66, Level 10 = 0.90, Level 15 = 1.20
+                targetCup.maxSpeed = 0.60 + (gameState.level - 5) * 0.06;
+                targetCup.speed = targetCup.maxSpeed * 0.5;
             } else {
-                // Seviye 5'ten sonra eskisi gibi 0.25 fırlamak yerine sadece 0.08 artar
-                targetCup.maxSpeed = 0.32 + (gameState.level - 5) * 0.08;
-                targetCup.speed = targetCup.maxSpeed * 0.33;
+                // Level 16+: daha yavaş artış, zor ama yenilebilir kalsın
+                // Level 16 = 1.23, Level 25 = 1.50, Level 50 = 2.25
+                targetCup.maxSpeed = Math.min(2.5, 1.20 + (gameState.level - 15) * 0.03);
+                targetCup.speed = targetCup.maxSpeed * 0.5;
             }
             
             // GDD: Üst bardaktan 180px aşağıda
@@ -1156,15 +1260,39 @@
                 maxOffsetX = ideal;
             }
             
-            let offsetX = minOffsetX + Math.random() * (maxOffsetX - minOffsetX);
-            let newX = topCup.x + (side * offsetX);
-            
             // Şekil flask ise dipte 1.15x genişlik var, duvar payı için bunu hesaba kat
             let visualHalfW = targetCup.w / 2;
             if (targetCup.shape === 'flask') visualHalfW *= 1.15;
-            if (newX - visualHalfW < 10 || newX + visualHalfW > canvas.width - 10) {
-                side = side * -1;
+
+            let newX;
+            if (gameState.level === 1) {
+                // Level 1: kullanıcı yeni öğreniyor — eski yakın spawn mantığı kalsın (hareket yok zaten)
+                let offsetX = minOffsetX + Math.random() * (maxOffsetX - minOffsetX);
                 newX = topCup.x + (side * offsetX);
+                if (newX - visualHalfW < 10 || newX + visualHalfW > canvas.width - 10) {
+                    side = side * -1;
+                    newX = topCup.x + (side * offsetX);
+                }
+            } else {
+                // Level 2+: HAREKETLİ mod — tüm ekranda gerçekten rastgele spawn
+                // Bu sayede çeşitlilik artar, bardak bazen yakında bazen uzakta çıkar.
+                // Sınır: ekranın kenarlarından visualHalfW + 10 piksel uzakta kalsın (taşmasın)
+                let minX = visualHalfW + 10;
+                let maxX = canvas.width - visualHalfW - 10;
+                // Üst bardakla TAM ÜST ÜSTE olmasın diye min 60px mesafe bırak
+                // (çok yakın olursa oyun anlamsız olur, dökmeden başka bardağa geçer)
+                let minDistance = 60;
+                let attempts = 0;
+                do {
+                    newX = minX + Math.random() * (maxX - minX);
+                    attempts++;
+                } while (Math.abs(newX - topCup.x) < minDistance && attempts < 10);
+                // 10 deneme sonunda hala uygun yer yoksa zorla bir tarafa it
+                if (Math.abs(newX - topCup.x) < minDistance) {
+                    newX = topCup.x + (Math.random() < 0.5 ? -minDistance : minDistance);
+                    newX = Math.max(minX, Math.min(maxX, newX));
+                }
+                side = (newX < topCup.x) ? -1 : 1;
             }
             let halfW = targetCup.w / 2; // çarpışma için sabit halfW
             targetCup.x = clamp(newX, visualHalfW + 10, canvas.width - visualHalfW - 10);
@@ -1206,6 +1334,15 @@
                 }
                 if (isInsideCircle(pos.x, pos.y, btnSound)) {
                     gameState.soundEnabled = !gameState.soundEnabled;
+                    localStorage.setItem('pourDownSound', gameState.soundEnabled);
+                    if (!gameState.soundEnabled) { stopPourSound(); stopTiltSound(); stopFillNearSound(); }
+                    return;
+                }
+                if (isInsideCircle(pos.x, pos.y, btnMusic)) {
+                    gameState.musicEnabled = !gameState.musicEnabled;
+                    localStorage.setItem('pourDownMusic', gameState.musicEnabled);
+                    if (!gameState.musicEnabled) stopMusic();
+                    return;
                 }
                 return;
             }
@@ -1356,7 +1493,9 @@
                 }
                 isDragging = true;
                 targetAngle = topCup.angle;
-                startX = pos.x - (targetAngle / 0.6);
+                // PERF/UX: hassasiyet artırıldı 0.6 → 1.0 (1px sürükleme = 1° eğim)
+                // Daha az parmak hareketiyle daha iyi kontrol, özellikle mobilde
+                startX = pos.x - (targetAngle / 1.0);
             }
         }
 
@@ -1370,7 +1509,8 @@
             if (!isDragging || gameState.state !== 'PLAYING') return;
             let pos = getPointerPos(e);
             let dx = pos.x - startX;
-            targetAngle = clamp(dx * 0.6, -90, 90);
+            // UX: hassasiyet 0.6 → 1.0 (yukarıda startX hesabıyla aynı çarpan olmalı)
+            targetAngle = clamp(dx * 1.0, -90, 90);
         }
 
         window.addEventListener('mouseup', () => { isDragging = false; targetAngle = 0; });
@@ -1496,7 +1636,7 @@
             
             if (glowColor !== 'transparent') {
                 ctx.shadowColor = glowColor;
-                ctx.shadowBlur = 15;
+                ctx.shadowBlur = 15 * _shadowScale;  // PERF: mobilde yarıya iner
             }
             ctx.fillStyle = fillBody;
             ctx.fill();
@@ -1526,8 +1666,10 @@
                 const time = Date.now() / 1000;
 
                 // ANA SIVI DALGASI (3 Katmanlı Sinüs)
+                // PERFORMANS: Mobilde adım 4px (görsel olarak fark edilmez, %50 daha az sin hesabı)
                 ctx.beginPath();
-                for (let px = -w/2; px <= w/2; px += 2) {
+                let _waveFirst = true;
+                for (let px = -w/2; px <= w/2; px += _waveStep) {
                     let pRatio = (px - (-w/2)) / w;
                     let baseY = leftY + (rightY - leftY) * pRatio;
 
@@ -1538,8 +1680,9 @@
                     const impactWave = Math.sin(time * 12 + px * 0.18) * (cObj.waveImpact || 0);
                     const totalWave = (wave1 + wave2 + wave3) * cObj.waveMultiplier + impactWave;
 
-                    if (px === -w/2) {
+                    if (_waveFirst) {
                         ctx.moveTo(px, baseY + totalWave);
+                        _waveFirst = false;
                     } else {
                         ctx.lineTo(px, baseY + totalWave);
                     }
@@ -2091,9 +2234,9 @@
             // Alt başlık
             ctx.save();
             ctx.textAlign = 'center';
-            ctx.fillStyle = 'rgba(150,210,240,0.65)';
-            ctx.font = "17px 'Bebas Neue', cursive";
-            ctx.fillText('Bardağı eğilt  •  Sıvıyı dök  •  Devam et', W/2, 165);
+            ctx.fillStyle = 'rgba(150,210,240,0.75)';
+            ctx.font = "16px 'Bebas Neue', cursive";
+            ctx.fillText('Doldur  •  Dök  •  İlerle', W/2, 165);
             ctx.restore();
 
             // Seviye rozeti (tema rengi çizgi)
@@ -2125,6 +2268,13 @@
                     _ambientParticleTarget = 25;
                 } else if (avg > 58 && _ambientParticleTarget < 50) {
                     _ambientParticleTarget = 50;
+                }
+                // DPR yükseltme - sadece bir kez, ilk 3 saniyenin ortalaması alındıktan sonra
+                // Bu sayede cihazın gerçek hızı belli olur, doğru DPR seçilir
+                if (!_dprApplied && _fpsHistory[0] >= 30) {
+                    // _fpsHistory başlangıçta [60,60,60] dolu, gerçek ölçüm geldiğinde ortalama düzgün olur
+                    // İlk gerçek ölçüm sonrası DPR'ı uygula
+                    maybeUpgradeDPR(avg);
                 }
             }
             if (gameState.state === 'MENU') {
@@ -2181,30 +2331,65 @@
                 ctx.fillText(gameState.soundEnabled ? '🔊' : '🔇', btnSound.x, btnSound.y + 6);
                 ctx.restore();
 
-                // ── BUGÜNÜN GÖREVLERİ PANELİ ──
-                let mY = 685;
+                // ── MÜZİK BUTONU ──
                 ctx.save();
-                ctx.fillStyle = 'rgba(0,0,0,0.35)';
-                ctx.beginPath(); ctx.roundRect(W/2 - 150, mY, 300, 108, 14); ctx.fill();
-                ctx.strokeStyle = 'rgba(255,255,255,0.1)'; ctx.lineWidth = 1; ctx.stroke();
-                ctx.fillStyle = 'rgba(255,255,255,0.35)';
-                ctx.font = "bold 11px 'Bebas Neue', cursive"; ctx.textAlign = 'center';
-                ctx.fillText('📋  BUGÜNÜN GÖREVLERİ', W/2, mY + 16);
+                ctx.beginPath();
+                ctx.arc(btnMusic.x, btnMusic.y, btnMusic.r, 0, Math.PI*2);
+                ctx.fillStyle = 'rgba(255,255,255,0.1)';
+                ctx.strokeStyle = 'rgba(255,255,255,0.25)'; ctx.lineWidth = 1.5;
+                ctx.fill(); ctx.stroke();
+                ctx.fillStyle = 'white';
+                ctx.font = "18px 'Bebas Neue', cursive"; ctx.textAlign = 'center';
+                ctx.fillText('🎵', btnMusic.x, btnMusic.y + 6);
+                // Müzik kapalıysa üzerinde kırmızı X göster
+                if (!gameState.musicEnabled) {
+                    ctx.strokeStyle = 'rgba(255,80,80,0.95)';
+                    ctx.lineWidth = 2.5;
+                    ctx.beginPath();
+                    ctx.moveTo(btnMusic.x - 11, btnMusic.y - 11);
+                    ctx.lineTo(btnMusic.x + 11, btnMusic.y + 11);
+                    ctx.stroke();
+                }
+                ctx.restore();
+
+                // ── BUGÜNÜN GÖREVLERİ PANELİ ──
+                let mY = 670;
+                ctx.save();
+                // Panel arka planı (biraz daha büyük ve görünür)
+                ctx.fillStyle = 'rgba(0,0,0,0.45)';
+                ctx.beginPath(); ctx.roundRect(W/2 - 155, mY, 310, 122, 14); ctx.fill();
+                ctx.strokeStyle = 'rgba(255,255,255,0.18)'; ctx.lineWidth = 1; ctx.stroke();
+                // Başlık - büyütüldü ve daha belirgin
+                ctx.fillStyle = 'rgba(255,255,255,0.75)';
+                ctx.font = "bold 14px 'Bebas Neue', cursive"; ctx.textAlign = 'center';
+                ctx.fillText('📋  GÜNLÜK GÖREVLER', W/2, mY + 20);
+                // Başlık altı ince ayırıcı çizgi
+                ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(W/2 - 130, mY + 28);
+                ctx.lineTo(W/2 + 130, mY + 28);
+                ctx.stroke();
                 dailyMissions.forEach(function(m, i) {
-                    let my = mY + 32 + i * 26;
+                    let my = mY + 36 + i * 28;
                     let pct = m.done ? 1 : Math.min(1, m.progress / m.target);
-                    ctx.fillStyle = 'rgba(255,255,255,0.06)';
-                    ctx.beginPath(); ctx.roundRect(W/2 - 138, my, 276, 18, 9); ctx.fill();
+                    // Progress bar arka planı (daha kalın)
+                    ctx.fillStyle = 'rgba(255,255,255,0.08)';
+                    ctx.beginPath(); ctx.roundRect(W/2 - 143, my, 286, 22, 11); ctx.fill();
+                    // Progress dolgu
                     if (pct > 0) {
                         ctx.fillStyle = m.done ? '#4caf50' : '#4fc3f7';
-                        ctx.beginPath(); ctx.roundRect(W/2 - 138, my, 276 * pct, 18, 9); ctx.fill();
+                        ctx.beginPath(); ctx.roundRect(W/2 - 143, my, 286 * pct, 22, 11); ctx.fill();
                     }
-                    ctx.fillStyle = m.done ? 'rgba(150,255,150,0.9)' : 'rgba(255,255,255,0.75)';
-                    ctx.font = "12px 'Bebas Neue', cursive"; ctx.textAlign = 'left';
-                    ctx.fillText((m.done ? '✅' : m.icon) + ' ' + m.text, W/2 - 132, my + 13);
+                    // Görev metni - büyütüldü ve daha okunaklı
+                    ctx.fillStyle = m.done ? 'rgba(180,255,180,1)' : 'rgba(255,255,255,0.95)';
+                    ctx.font = "bold 14px 'Bebas Neue', cursive"; ctx.textAlign = 'left';
+                    ctx.fillText((m.done ? '✅' : m.icon) + ' ' + m.text, W/2 - 137, my + 16);
+                    // Bonus puan - büyütüldü
                     ctx.textAlign = 'right';
                     ctx.fillStyle = '#ffd700';
-                    ctx.fillText('+' + m.bonus, W/2 + 132, my + 13);
+                    ctx.font = "bold 14px 'Bebas Neue', cursive";
+                    ctx.fillText('+' + m.bonus, W/2 + 137, my + 16);
                 });
                 ctx.restore();
 
@@ -2221,7 +2406,7 @@
                 ctx.fillStyle = 'rgba(255,255,255,0.28)';
                 ctx.font = "14px 'Bebas Neue', cursive";
                 ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-                ctx.fillText('POUR DOWN  v1.1  •  ANA EKRANA EKLENEBİLİR  •  🏆 REKOR: ' + gameState.highScore, W / 2, H - 18);
+                ctx.fillText('POUR DOWN  v1.1  •  🏆 REKOR: ' + gameState.highScore, W / 2, H - 18);
                 ctx.textBaseline = 'alphabetic';
                 ctx.restore();
 
@@ -2729,11 +2914,13 @@
                 }
 
                 // Sürükleme bitince açıyı sıfıra yumuşatarak çek
+                // UX: az sıvı varken son damlaları dökmek için bırakınca daha yumuşak düzelir
+                // (0.88 → 0.94, daha yavaş düzelme — ~0.5 sn'de dik olur, eskisi ~0.2 sn idi)
                 if (isDragging) {
                     topCup.angle += (targetAngle - topCup.angle) * 0.15 * dt;
                 } else {
                     targetAngle = 0;
-                    topCup.angle *= Math.pow(0.88, dt);
+                    topCup.angle *= Math.pow(0.94, dt);
                 }
 
                 // Adım 3: Sıvı Akıtma Fiziği
@@ -2994,7 +3181,7 @@
                         
                         ctx.save();
                         ctx.shadowColor = `rgba(${flowQ[0]},${flowQ[1]},${flowQ[2]},0.6)`;
-                        ctx.shadowBlur = 8;
+                        ctx.shadowBlur = 8 * _shadowScale;  // PERF: mobilde yarıya iner
                         
                         ctx.beginPath();
                         // Sol kenar
@@ -3193,7 +3380,7 @@
                 ctx.font = "bold 36px 'Bebas Neue', cursive";
                 ctx.textAlign = 'center';
                 ctx.shadowColor = `rgba(255, 215, 0, ${p.alpha * 0.5})`;
-                ctx.shadowBlur = 10;
+                ctx.shadowBlur = 10 * _shadowScale;  // PERF: mobilde yarıya iner
                 ctx.fillText(p.text, p.x, p.y);
                 ctx.shadowBlur = 0; // Sıfırla
                 if (p.alpha <= 0) {
@@ -3488,36 +3675,77 @@
                 btnMusicToggle = { x: togMusicX, y: togY, r: toggleR };
             }
 
-            // ─── TEMA GEÇİŞİ FLASH + İSİM ───
+            // ─── TEMA GEÇİŞİ FLASH + İSİM (İYİLEŞTİRİLMİŞ) ───
+            // Önceki: düz beyaz flash → şimdi: tema renginde radial flash (daha tematik)
             if (themeFlashTimer > 0) {
-                let alpha = themeFlashTimer / 60 * 0.5;
-                ctx.fillStyle = `rgba(255,255,255,${alpha})`;
+                let lqF = currentTheme.liquid.map(Math.round);
+                // Tema rengiyle hafif gradient flash (radial, kenarlar daha yoğun)
+                let progress = themeFlashTimer / 60;
+                let alpha = progress * 0.35;  // beyazdan daha yumuşak
+                // İç katman: tema rengi
+                ctx.fillStyle = `rgba(${lqF[0]},${lqF[1]},${lqF[2]},${alpha * 0.6})`;
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                // Üst katman: hafif beyaz (vintage flash hissi)
+                ctx.fillStyle = `rgba(255,255,255,${alpha * 0.25})`;
                 ctx.fillRect(0, 0, canvas.width, canvas.height);
                 themeFlashTimer--;
             }
             if (themeAnnounceTimer > 0 && themeAnnounceData) {
                 let t = themeAnnounceTimer;
+                // Daha smooth easing — ease-out cubic
+                let progress = (120 - t) / 120;
                 let alpha = t > 90 ? (120 - t) / 30 : (t < 30 ? t / 30 : 1);
-                let scale = t > 100 ? 1.5 - (t - 100) * 0.025 : 1;
+                // Scale: gelirken büyür, sonra hafif "pop" effect
+                let scale;
+                if (t > 100) {
+                    let p = (120 - t) / 20;  // 0..1
+                    scale = 0.5 + p * 0.65;  // 0.5'ten 1.15'e büyür
+                } else if (t > 85) {
+                    let p = (100 - t) / 15;  // 0..1
+                    scale = 1.15 - p * 0.15;  // 1.15'ten 1.0'a iner (bounce hissi)
+                } else {
+                    scale = 1.0;
+                }
                 ctx.save();
                 ctx.globalAlpha = alpha;
                 ctx.translate(canvas.width / 2, canvas.height / 2 - 60);
                 ctx.scale(scale, scale);
-                // Glow background
+                
                 let lq = currentTheme.liquid.map(Math.round);
-                ctx.fillStyle = `rgba(${lq[0]},${lq[1]},${lq[2]},0.18)`;
+                
+                // YENİ: Dış glow halkası (sadece banner'da, performans için sınırlı)
+                if (!_isMobile || t > 30) {  // mobilde sadece pik anlarda
+                    ctx.shadowColor = `rgba(${lq[0]},${lq[1]},${lq[2]},0.7)`;
+                    ctx.shadowBlur = 20 * _shadowScale;
+                }
+                
+                // Arka plan paneli (daha şık - gradient hissi için 2 katman)
+                ctx.fillStyle = `rgba(${lq[0]},${lq[1]},${lq[2]},0.25)`;
                 ctx.beginPath(); ctx.roundRect(-130, -42, 260, 84, 16); ctx.fill();
-                ctx.strokeStyle = `rgba(${lq[0]},${lq[1]},${lq[2]},0.9)`;
-                ctx.lineWidth = 2; ctx.stroke();
-                // İkon
+                // İç hafif aydınlatma
+                ctx.fillStyle = `rgba(255,255,255,0.08)`;
+                ctx.beginPath(); ctx.roundRect(-126, -38, 252, 36, [14,14,4,4]); ctx.fill();
+                
+                ctx.shadowBlur = 0;  // glow reset
+                
+                // Çerçeve
+                ctx.strokeStyle = `rgba(${lq[0]},${lq[1]},${lq[2]},0.95)`;
+                ctx.lineWidth = 2;
+                ctx.beginPath(); ctx.roundRect(-130, -42, 260, 84, 16); ctx.stroke();
+                
+                // İkon (hafif sallanma efekti - canlılık verir)
+                let iconBob = Math.sin((120 - t) * 0.3) * 1.5;
                 ctx.font = '38px serif';
                 ctx.textAlign = 'center';
                 ctx.fillStyle = 'white';
-                ctx.fillText(themeAnnounceData.icon, 0, -2);
+                ctx.fillText(themeAnnounceData.icon, 0, -2 + iconBob);
+                
                 // İsim
                 ctx.font = "bold 22px 'Bebas Neue', cursive";
                 ctx.fillStyle = `rgb(${lq[0]},${lq[1]},${lq[2]})`;
+                // İsim altında ince çizgi (vurgu)
                 ctx.fillText(themeAnnounceData.name + ' MODU', 0, 28);
+                
                 ctx.restore();
                 themeAnnounceTimer--;
             }
@@ -3576,14 +3804,5 @@
 
         requestAnimationFrame(draw);
     </script>
-<script>
-    if ('serviceWorker' in navigator) {
-        window.addEventListener('load', function() {
-            navigator.serviceWorker.register('./service-worker.js')
-                .then(function(reg) { console.log('[SW] Kayit basarili:', reg.scope); })
-                .catch(function(err) { console.warn('[SW] Kayit basarisiz:', err); });
-        });
-    }
-</script>
 </body>
 </html>
