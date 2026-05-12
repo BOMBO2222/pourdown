@@ -186,11 +186,14 @@
         }
 
         function unlockAchievement(id) {
+            // BAŞARIM SİSTEMİ GİZLENDİ - kullanıcı isteğiyle.
+            // İlerleyen sürümlerde geri açılabilir; veriyi yine de kaydediyoruz, sadece UI'da göstermiyoruz.
             if (unlockedAchievements.includes(id)) return;
             unlockedAchievements.push(id);
             localStorage.setItem('pourDownAchievements', JSON.stringify(unlockedAchievements));
-            let def = achievementDefs.find(a => a.id === id);
-            if (def) toastQueue.push({ ...def, timer: 200 });
+            // toast push devre dışı - başarım açma popup'ı görünmez artık
+            // let def = achievementDefs.find(a => a.id === id);
+            // if (def) toastQueue.push({ ...def, timer: 200 });
         }
 
         function checkAchievements(event, data) {
@@ -1146,18 +1149,16 @@
                 targetCup.speed = 0;
             } else if (gameState.level <= 5) {
                 // Level 2-5: hızlı başlangıç, eğlenceli ritim
-                // Level 2 = 0.30, Level 3 = 0.40, Level 4 = 0.50, Level 5 = 0.60
-                targetCup.maxSpeed = 0.20 + (gameState.level - 1) * 0.10;
+                // Tempo %19 hızlandığı için bardak hızı %15 düşürüldü (net etki: ~+%4 hızlanma, zorluk azalır)
+                targetCup.maxSpeed = 0.17 + (gameState.level - 1) * 0.085;
                 targetCup.speed = targetCup.maxSpeed * 0.5;
             } else if (gameState.level <= 15) {
-                // Level 6-15: yumuşak artış (her level +0.06)
-                // Level 6 = 0.66, Level 10 = 0.90, Level 15 = 1.20
-                targetCup.maxSpeed = 0.60 + (gameState.level - 5) * 0.06;
+                // Level 6-15: yumuşak artış
+                targetCup.maxSpeed = 0.51 + (gameState.level - 5) * 0.051;
                 targetCup.speed = targetCup.maxSpeed * 0.5;
             } else {
                 // Level 16+: daha yavaş artış, zor ama yenilebilir kalsın
-                // Level 16 = 1.23, Level 25 = 1.50, Level 50 = 2.25
-                targetCup.maxSpeed = Math.min(2.5, 1.20 + (gameState.level - 15) * 0.03);
+                targetCup.maxSpeed = Math.min(2.1, 1.02 + (gameState.level - 15) * 0.025);
                 targetCup.speed = targetCup.maxSpeed * 0.5;
             }
             
@@ -1571,8 +1572,9 @@
             if (cObj.fill > 0) {
                 let fillH = (cObj.fill / 100) * h;
                 let rad = (cObj.angle || 0) * Math.PI / 180;
-                // tan değerini sınırla (90 derecede sonsuza gitmesin)
-                let tanVal = Math.max(-20, Math.min(20, Math.tan(rad)));
+                // tan değerini sınırla - 30'a yükseltildi (eski 20)
+                // Bu sayede yüksek açıda da sıvı yüzeyi gerçekçi eğilir, sıvı azken bardak görseli düzgün düşer
+                let tanVal = Math.max(-30, Math.min(30, Math.tan(rad)));
 
                 // Matematiksel olarak mükemmel yatay su yüzeyi
                 let leftY = (h/2 - fillH) + tanVal * (w/2);
@@ -2174,7 +2176,10 @@
         let dt = 1; // 60Hz'e göre normalize edilmiş çarpan
         function draw() {
             let nowTime = performance.now();
-            dt = Math.min(2.5, (nowTime - lastFrameTime) / 8.33);
+            // TEMPO: dt referansını 8.33 (120Hz) → 7.0 (~143Hz) yaptık.
+            // Sonuç: tüm animasyonlar ~%19 daha hızlı akar (bardak hareketi, sıvı dökme, geçişler).
+            // clamp 2.5 → 3.0 (düşük FPS'te de tempo korunur, kasma olsa bile akış yavaşlamaz)
+            dt = Math.min(3.0, (nowTime - lastFrameTime) / 7.0);
             lastFrameTime = nowTime;
 
             // ─── PERFORMANS: FPS sayımı + Adaptive ambient ───
@@ -2780,8 +2785,8 @@
                 ctx.fillText('ANA MENÜ', cx2, b2Y + 7);
                 btnGameOverMenu.y = b2Y; 
 
-                // BAŞARIMLAR (game-over panelinin altına küçük ikonlar)
-                if (unlockedAchievements.length > 0) {
+                // BAŞARIMLAR — GİZLENDİ (kullanıcı isteğiyle, ileride geri açılabilir)
+                if (false && unlockedAchievements.length > 0) {
                     let aY = pY + pH + 18;
                     ctx.save();
                     ctx.textAlign = 'center';
@@ -3092,7 +3097,7 @@
                 for (let seg of segments) {
                     if (seg.length >= 2) {
                         let topW = 4 + pourStrength * 6;
-                        let botW = 1.5;
+                        let botW = 2.5;  // Eski 1.5'tan arttırıldı - alt uç sivri/kesik görünmesin
                         
                         ctx.save();
                         ctx.shadowColor = `rgba(${flowQ[0]},${flowQ[1]},${flowQ[2]},0.6)`;
@@ -3120,7 +3125,7 @@
                         let lastP = seg[seg.length - 1];
                         let sg = ctx.createLinearGradient(0, firstP.y, 0, lastP.y);
                         sg.addColorStop(0, `rgba(${flowQ[0]},${flowQ[1]},${flowQ[2]},0.95)`);
-                        sg.addColorStop(1, `rgba(${flowQ[0]},${flowQ[1]},${flowQ[2]},0.4)`);
+                        sg.addColorStop(1, `rgba(${flowQ[0]},${flowQ[1]},${flowQ[2]},0.55)`);  // Eski 0.4 - alt uç daha görünür kalsın, kesik hissi azalır
                         ctx.fillStyle = sg;
                         ctx.fill();
                         
@@ -3389,10 +3394,11 @@
             ctx.restore();
 
             // 3. Kombo Rozeti (Sağ üst) — sadece kombo varken görünür
+            // Pause butonu sağ üstte (x=350, r=20 → 330-370 arası), combo rozetini pause'un soluna koyarız
             if (comboCount >= 2) {
                 let ct = Date.now() / 1000;
                 let pulse = 0.85 + Math.sin(ct * 6) * 0.15;
-                let cbX = canvas.width - 18;
+                let cbX = canvas.width - 60;  // pause butonunun 40px solu - artık çakışmıyor
                 let cbColors = comboCount >= 5 ? [255,80,80] : comboCount >= 3 ? [255,160,20] : [255,215,0];
                 let cbLabel = comboCount >= 5 ? '🔥' : comboCount >= 3 ? '⚡' : '✨';
                 ctx.save();
