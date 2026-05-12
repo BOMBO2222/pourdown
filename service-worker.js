@@ -8,7 +8,7 @@ const CACHE_NAME = `pourdown-cache-${CACHE_VERSION}`;
 // Cache'lenecek dosyalar
 const ASSETS_TO_CACHE = [
     './',
-    './pourdown_v1_perf_fix_1.html',
+    './index.html',
     './manifest.json',
     './icon-192.png',
     './icon-512.png',
@@ -76,7 +76,7 @@ self.addEventListener('fetch', (event) => {
                     // Network başarısız ve cache'de yok - offline durumu
                     // Ana sayfa istemi ise ana HTML'i döndür
                     if (event.request.mode === 'navigate') {
-                        return caches.match('./pourdown_v1_perf_fix_1.html');
+                        return caches.match('./index.html');
                     }
                 });
             })
