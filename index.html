@@ -1,13 +1,13 @@
 <!DOCTYPE html>
-<html lang="tr">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Pour Down — Bardağı Eğilt, Sıvıyı Dök!</title>
+    <title>Pour Down — Tilt the Cup, Pour the Liquid!</title>
 
     <!-- SEO -->
-    <meta name="description" content="Pour Down: Bardağı eğilterek alt bardaca sıvı dök. Kaç tur dayanabilirsin?">
-    <meta name="keywords" content="pour down, oyun, mobil oyun, bardağ, sıvı, fizik oyunu">
+    <meta name="description" content="Pour Down: Tilt the cup and pour liquid into the target. How many rounds can you survive?">
+    <meta name="keywords" content="pour down, game, mobile game, cup, liquid, physics game, puzzle">
     <meta name="author" content="Pour Down Studio">
     <meta name="theme-color" content="#0d1b2a">
 
@@ -42,6 +42,11 @@
             max-width: 100%;
             max-height: 100%;
             object-fit: contain;
+            /* Mobil ekranda keskin görünüm - tarayıcıya bulanıklaştırma yapma der */
+            image-rendering: -webkit-optimize-contrast;
+            image-rendering: crisp-edges;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
         }
     </style>
 </head>
@@ -107,16 +112,16 @@
         //  BAŞARIM SİSTEMİ
         // ============================================================
         const achievementDefs = [
-            { id: 'first_pour', icon: '💧', name: 'İlk Damla',     desc: 'İlk dökmeyi yaptın!' },
-            { id: 'level5',     icon: '⭐', name: 'Çaylak',         desc: "Level 5'e ulaştın" },
-            { id: 'level10',    icon: '🏆', name: 'Uzman',          desc: "Level 10'a ulaştın" },
-            { id: 'level20',    icon: '👑', name: 'Efsane',         desc: "Level 20'ye ulaştın" },
-            { id: 'level50',    icon: '💎', name: 'Efsanevi',       desc: "Level 50'ye ulaştın" },
-            { id: 'perfect',    icon: '🎯', name: 'Mükemmel',       desc: 'Alt bardağı tam doldurdun' },
-            { id: 'fire5',      icon: '🔥', name: 'Ateşli',         desc: '5 ardışık mükemmel doldurma' },
-            { id: 'saver',      icon: '🌊', name: 'Tasarrufçu',     desc: '%80 sıvı ile 5 tur geç' },
-            { id: 'rainbow',    icon: '🌈', name: 'Gökkuşağı',      desc: 'Tüm 6 renk temasını gör' },
-            { id: 'speed',      icon: '⚡', name: 'Hızlı El',       desc: 'Bir turu 5 saniyede geç' },
+            { id: 'first_pour', icon: '💧', name: 'First Drop',    desc: 'You made your first pour!' },
+            { id: 'level5',     icon: '⭐', name: 'Rookie',         desc: "Reached Level 5" },
+            { id: 'level10',    icon: '🏆', name: 'Expert',         desc: "Reached Level 10" },
+            { id: 'level20',    icon: '👑', name: 'Legend',         desc: "Reached Level 20" },
+            { id: 'level50',    icon: '💎', name: 'Mythic',         desc: "Reached Level 50" },
+            { id: 'perfect',    icon: '🎯', name: 'Perfect',        desc: 'Filled the target cup completely' },
+            { id: 'fire5',      icon: '🔥', name: 'On Fire',        desc: '5 consecutive perfect fills' },
+            { id: 'saver',      icon: '🌊', name: 'Saver',          desc: 'Passed 5 rounds with 80% liquid' },
+            { id: 'rainbow',    icon: '🌈', name: 'Rainbow',        desc: 'Saw all 6 color themes' },
+            { id: 'speed',      icon: '⚡', name: 'Fast Hand',      desc: 'Finished a round in 5 seconds' },
         ];
         let unlockedAchievements = JSON.parse(localStorage.getItem('pourDownAchievements') || '[]');
         let toastQueue = [];
@@ -132,17 +137,17 @@
         let themeAnnounceData = null;
 
         // ============================================================
-        //  GÜNLÜK GÖREV SİSTEMİ
+        //  DAILY MISSIONS SYSTEM
         // ============================================================
         const missionPool = [
-            { id:'m_level5',   icon:'⭐', text:'Level 5\'e ulaş',       type:'level',  target:5,   bonus:50  },
-            { id:'m_level10',  icon:'🏆', text:'Level 10\'a ulaş',      type:'level',  target:10,  bonus:100 },
-            { id:'m_combo2',   icon:'✨', text:'2\'li kombo yap',        type:'combo',  target:2,   bonus:40  },
-            { id:'m_combo3',   icon:'⚡', text:'3\'lü kombo yap',        type:'combo',  target:3,   bonus:80  },
-            { id:'m_score200', icon:'💰', text:'200 puan kazan',         type:'score',  target:200, bonus:60  },
-            { id:'m_score500', icon:'💎', text:'500 puan kazan',         type:'score',  target:500, bonus:150 },
-            { id:'m_saver',    icon:'🌊', text:'%60+ sıvıyla 3 tur geç', type:'saver',  target:3,   bonus:70  },
-            { id:'m_speed',    icon:'🚀', text:'Turu 5 sn\'de bitir',    type:'speed',  target:1,   bonus:60  },
+            { id:'m_level5',   icon:'⭐', text:'Reach Level 5',          type:'level',  target:5,   bonus:50  },
+            { id:'m_level10',  icon:'🏆', text:'Reach Level 10',         type:'level',  target:10,  bonus:100 },
+            { id:'m_combo2',   icon:'✨', text:'Make a 2x combo',        type:'combo',  target:2,   bonus:40  },
+            { id:'m_combo3',   icon:'⚡', text:'Make a 3x combo',        type:'combo',  target:3,   bonus:80  },
+            { id:'m_score200', icon:'💰', text:'Score 200 points',       type:'score',  target:200, bonus:60  },
+            { id:'m_score500', icon:'💎', text:'Score 500 points',       type:'score',  target:500, bonus:150 },
+            { id:'m_saver',    icon:'🌊', text:'Pass 3 rounds with 60%+ liquid', type:'saver',  target:3,   bonus:70  },
+            { id:'m_speed',    icon:'🚀', text:'Finish a round in 5s',   type:'speed',  target:1,   bonus:60  },
         ];
 
         function getTodayKey() {
@@ -179,7 +184,8 @@
                 if (!m.done && m.progress >= m.target) {
                     m.done = true; changed = true;
                     gameState.score += m.bonus;
-                    toastQueue.push({ icon: m.icon, name: 'GÖREV TAMAM!', desc: m.text + ' (+' + m.bonus + ' puan)', timer: 220 });
+                    // Mission complete toast disabled - no purpose, user doesn't see missions
+                    // toastQueue.push({ icon: m.icon, name: 'MISSION COMPLETE!', desc: m.text + ' (+' + m.bonus + ' pts)', timer: 220 });
                 }
             });
             if (changed) saveDailyMissions();
@@ -240,7 +246,7 @@
             // Etiket
             ctx.font = "bold 11px 'Bebas Neue', cursive";
             ctx.fillStyle = `rgba(${tBorder[0]},${tBorder[1]},${tBorder[2]},1)`;
-            ctx.fillText('BAŞARIM AÇILDI!', canvas.width/2 - 97, ty - 8);
+            ctx.fillText(currentToast.label || 'NOTIFICATION', canvas.width/2 - 97, ty - 8);
             // Ad
             ctx.font = "bold 18px 'Bebas Neue', cursive";
             ctx.fillStyle = 'white';
@@ -254,12 +260,18 @@
 
         // Tema ve Dinamik Arka Plan Sistemi
         const themes = [
-            { name: 'SU',     icon: '💧', viscosity: 1.0, shape: 'normal',   bgInner: [18, 38, 62],  bgOuter: [4, 10, 22],  liquid: [79, 195, 247]  },
-            { name: 'LAV',    icon: '🔥', viscosity: 0.65,shape: 'volcano',  bgInner: [50, 22, 4],   bgOuter: [18, 5, 0],   liquid: [255, 120, 20]  },
-            { name: 'ZEHİR',  icon: '☢️', viscosity: 1.3, shape: 'flask',    bgInner: [8, 44, 16],   bgOuter: [2, 14, 4],   liquid: [0, 230, 100]   },
-            { name: 'ALTIN',  icon: '💰', viscosity: 0.75,shape: 'goblet',   bgInner: [44, 38, 4],   bgOuter: [16, 12, 0],  liquid: [255, 210, 40]  },
-            { name: 'BAL',    icon: '🍯', viscosity: 0.60,shape: 'honey',    bgInner: [40, 25, 5],   bgOuter: [15, 10, 0],  liquid: [255, 170, 0]   },
-            { name: 'GECE',   icon: '🌌', viscosity: 1.4, shape: 'mystic',   bgInner: [22, 14, 48],  bgOuter: [6, 4, 18],   liquid: [160, 110, 240] }
+            { name: 'WATER',    icon: '💧', viscosity: 1.0, shape: 'normal',   bgInner: [18, 38, 62],   bgOuter: [4, 10, 22],    liquid: [79, 195, 247]   },
+            { name: 'LAVA',     icon: '🔥', viscosity: 0.65,shape: 'volcano',  bgInner: [50, 22, 4],    bgOuter: [18, 5, 0],     liquid: [255, 120, 20]   },
+            { name: 'POISON',   icon: '☢️', viscosity: 1.3, shape: 'flask',    bgInner: [8, 44, 16],    bgOuter: [2, 14, 4],     liquid: [0, 230, 100]    },
+            { name: 'GOLD',     icon: '💰', viscosity: 0.75,shape: 'goblet',   bgInner: [44, 38, 4],    bgOuter: [16, 12, 0],    liquid: [255, 210, 40]   },
+            { name: 'HONEY',    icon: '🍯', viscosity: 0.60,shape: 'honey',    bgInner: [40, 25, 5],    bgOuter: [15, 10, 0],    liquid: [255, 170, 0]    },
+            { name: 'NIGHT',    icon: '🌌', viscosity: 1.4, shape: 'mystic',   bgInner: [22, 14, 48],   bgOuter: [6, 4, 18],     liquid: [160, 110, 240]  },
+            // ─── NEW THEMES ───
+            { name: 'OCEAN',    icon: '🌊', viscosity: 1.1, shape: 'flask',    bgInner: [4, 50, 80],    bgOuter: [0, 18, 36],    liquid: [32, 200, 220]   },
+            { name: 'MAGMA',    icon: '🌋', viscosity: 0.55,shape: 'volcano',  bgInner: [55, 5, 20],    bgOuter: [22, 2, 8],     liquid: [240, 40, 90]    },
+            { name: 'GALAXY',   icon: '🪐', viscosity: 1.0, shape: 'mystic',   bgInner: [35, 8, 60],    bgOuter: [12, 2, 28],    liquid: [220, 100, 240]  },
+            { name: 'SAKURA',   icon: '🌸', viscosity: 0.85,shape: 'goblet',   bgInner: [65, 20, 45],   bgOuter: [28, 8, 22],    liquid: [255, 160, 200]  },
+            { name: 'VOID',     icon: '🖤', viscosity: 1.5, shape: 'honey',    bgInner: [12, 12, 22],   bgOuter: [2, 2, 8],      liquid: [80, 100, 160]   }
         ];
 
         let currentTheme = {
@@ -302,6 +314,17 @@
 
         let gameOverStartTime = 0;
         let tutorialTimer = 0;
+        // Tutorial gösterilme sayacı - localStorage'da kaç oyun oynandığı tutulur
+        // İlk 3 oyunda tutorial gösterilir, sonra otomatik kaybolur
+        function getGamesPlayed() {
+            return parseInt(localStorage.getItem('pourDownGamesPlayed') || '0');
+        }
+        function incrementGamesPlayed() {
+            localStorage.setItem('pourDownGamesPlayed', getGamesPlayed() + 1);
+        }
+        function shouldShowTutorial() {
+            return getGamesPlayed() < 1;
+        }
 
         function isInsideRect(x, y, rect) {
             return x >= rect.x - rect.w/2 && x <= rect.x + rect.w/2 &&
@@ -492,8 +515,13 @@
             else if (_themeIdx === 1) baseFreq = 700;    // Lav: derin, boğuk
             else if (_themeIdx === 2) baseFreq = 2200;   // Zehir: tiz, sislenmiş
             else if (_themeIdx === 3) baseFreq = 1200;   // Altın: orta, metalik
-            else if (_themeIdx === 4) baseFreq = 900;    // Kan: kalın, ağır
+            else if (_themeIdx === 4) baseFreq = 900;    // Bal: kalın, ağır
             else if (_themeIdx === 5) baseFreq = 1800;   // Gece: hayalet gibi
+            else if (_themeIdx === 6) baseFreq = 1500;   // Okyanus: akışkan
+            else if (_themeIdx === 7) baseFreq = 600;    // Magma: yoğun, ağır
+            else if (_themeIdx === 8) baseFreq = 2000;   // Galaksi: uzay, eterik
+            else if (_themeIdx === 9) baseFreq = 1700;   // Sakura: yumuşak, çiçeksi
+            else if (_themeIdx === 10) baseFreq = 500;   // Karanlık: derin, kasvetli
 
             const filt = audioCtx.createBiquadFilter();
             filt.type = 'lowpass';
@@ -699,8 +727,14 @@
             { scale: [220.00, 246.94, 277.18, 329.63, 369.99], wave: 'triangle', filter: 700  }, // Lav: A minor pentatonik (karanlık)
             { scale: [293.66, 329.63, 369.99, 440.00, 493.88], wave: 'sine',     filter: 1500 }, // Zehir: D major pentatonik (tedirgin)
             { scale: [349.23, 392.00, 440.00, 523.25, 587.33], wave: 'triangle', filter: 1100 }, // Altın: F major pentatonik (parlak)
-            { scale: [196.00, 220.00, 246.94, 293.66, 329.63], wave: 'triangle', filter: 600  }, // Kan: G minor pentatonik (kasvetli)
+            { scale: [196.00, 220.00, 246.94, 293.66, 329.63], wave: 'triangle', filter: 600  }, // Bal: G minor pentatonik (kasvetli)
             { scale: [277.18, 311.13, 349.23, 415.30, 466.16], wave: 'sine',     filter: 1300 }, // Gece: C# minor pentatonik (büyülü)
+            // ─── YENİ TEMALAR ───
+            { scale: [261.63, 311.13, 349.23, 415.30, 466.16], wave: 'sine',     filter: 1400 }, // Okyanus: dalgalı, akışkan
+            { scale: [185.00, 207.65, 233.08, 277.18, 311.13], wave: 'sawtooth', filter: 550  }, // Magma: yoğun, ağır
+            { scale: [311.13, 349.23, 392.00, 466.16, 523.25], wave: 'sine',     filter: 1600 }, // Galaksi: rüya gibi, uzay
+            { scale: [329.63, 369.99, 415.30, 493.88, 554.37], wave: 'triangle', filter: 1700 }, // Sakura: hafif, çiçeksi
+            { scale: [174.61, 196.00, 220.00, 261.63, 293.66], wave: 'triangle', filter: 500  }  // Karanlık: derin, ağır
         ];
 
         function startMusic() {
@@ -1136,29 +1170,31 @@
             if (targetNewShape !== (targetCup.shape || 'normal') && gameState.level > 1) {
                 const shapeNames = { normal: 'Trapez', cylinder: 'Silindir', wide: 'Geniş', reverse: 'Ters Trapez', honey: 'Bal Küpü', goblet: 'Kadeh', flask: 'Şişe', volcano: 'Kâse', mystic: 'Kristal' };
                 let tName = shapeNames[targetNewShape] || 'Yeni';
-                toastQueue.push({ icon: '🏺', name: 'YENİ BARDAK!', desc: tName + ' şekli aktif', timer: 200 });
+                // New cup notification toast disabled (no in-game popup)
+                // toastQueue.push({ icon: '🏺', name: 'NEW CUP!', desc: tName + ' shape active', timer: 200 });
             }
 
             topCup.shape = topNewShape;
             targetCup.shape = targetNewShape;
 
-            // Hareket hızı: Dengeli artış - ilk leveller daha akıcı, ileri leveller fırlamayan kontrollü artış
-            if (gameState.level === 1) {
-                // Level 1: hareket yok, kullanıcı öğreniyor
+            // Hareket hızı: Level 1-4 öğretici (hareket yok), sonra dinamik artış
+            if (gameState.level <= 4) {
+                // Level 1-4: kullanıcı dökme mekanigini öğreniyor, bardak sabit
                 targetCup.maxSpeed = 0;
                 targetCup.speed = 0;
-            } else if (gameState.level <= 5) {
-                // Level 2-5: hızlı başlangıç, eğlenceli ritim
-                // Tempo %19 hızlandığı için bardak hızı %15 düşürüldü (net etki: ~+%4 hızlanma, zorluk azalır)
-                targetCup.maxSpeed = 0.17 + (gameState.level - 1) * 0.085;
+            } else if (gameState.level <= 10) {
+                // Level 5-10: dinamik başlangıç (oynanış akıcı olsun)
+                // Level 5 = 0.30, Level 6 = 0.37, Level 7 = 0.44, Level 8 = 0.51, Level 9 = 0.58, Level 10 = 0.65
+                targetCup.maxSpeed = 0.23 + (gameState.level - 4) * 0.07;
                 targetCup.speed = targetCup.maxSpeed * 0.5;
-            } else if (gameState.level <= 15) {
-                // Level 6-15: yumuşak artış
-                targetCup.maxSpeed = 0.51 + (gameState.level - 5) * 0.051;
+            } else if (gameState.level <= 20) {
+                // Level 11-20: orta tempo, yumuşak artış
+                // Level 11 = 0.72, Level 15 = 1.00, Level 20 = 1.30
+                targetCup.maxSpeed = 0.65 + (gameState.level - 10) * 0.065;
                 targetCup.speed = targetCup.maxSpeed * 0.5;
             } else {
-                // Level 16+: daha yavaş artış, zor ama yenilebilir kalsın
-                targetCup.maxSpeed = Math.min(2.1, 1.02 + (gameState.level - 15) * 0.025);
+                // Level 21+: zor ama yenilebilir
+                targetCup.maxSpeed = Math.min(2.2, 1.30 + (gameState.level - 20) * 0.035);
                 targetCup.speed = targetCup.maxSpeed * 0.5;
             }
             
@@ -1188,8 +1224,8 @@
             if (targetCup.shape === 'flask') visualHalfW *= 1.15;
 
             let newX;
-            if (gameState.level === 1) {
-                // Level 1: kullanıcı yeni öğreniyor — eski yakın spawn mantığı kalsın (hareket yok zaten)
+            if (gameState.level <= 4) {
+                // Level 1-4: kullanıcı yeni öğreniyor — dar yakın spawn (öğretici, kolay)
                 let offsetX = minOffsetX + Math.random() * (maxOffsetX - minOffsetX);
                 newX = topCup.x + (side * offsetX);
                 if (newX - visualHalfW < 10 || newX + visualHalfW > canvas.width - 10) {
@@ -1197,13 +1233,11 @@
                     newX = topCup.x + (side * offsetX);
                 }
             } else {
-                // Level 2+: HAREKETLİ mod — tüm ekranda gerçekten rastgele spawn
+                // Level 5+: HAREKETLİ mod — tüm ekranda gerçekten rastgele spawn
                 // Bu sayede çeşitlilik artar, bardak bazen yakında bazen uzakta çıkar.
-                // Sınır: ekranın kenarlarından visualHalfW + 10 piksel uzakta kalsın (taşmasın)
                 let minX = visualHalfW + 10;
                 let maxX = canvas.width - visualHalfW - 10;
                 // Üst bardakla TAM ÜST ÜSTE olmasın diye min 60px mesafe bırak
-                // (çok yakın olursa oyun anlamsız olur, dökmeden başka bardağa geçer)
                 let minDistance = 60;
                 let attempts = 0;
                 do {
@@ -1249,7 +1283,9 @@
                     gameState.score = 0;
                     gameState.totalLiquid = 100;
                     topCup.fill = 100;
-                    tutorialTimer = 220;
+                    // İlk 3 oyunda tutorial göster (yeni başlayanlara öğretici)
+                    tutorialTimer = shouldShowTutorial() ? 480 : 0;  // ~8 saniye
+                    incrementGamesPlayed();
                     levelStartTime = Date.now();
                     perfectStreak = 0;
                     seenThemes = new Set();
@@ -1293,7 +1329,7 @@
                     topCup.fill = 100;
                     targetCup.fill = 0;
                     targetCup.waveImpact = 0;
-                    tutorialTimer = 220;
+                    tutorialTimer = shouldShowTutorial() ? 480 : 0;
                     adSystem.reset();
                     streamParticles.length = 0;
                     splashParticles.length = 0;
@@ -1379,19 +1415,45 @@
                     burstLines.length = 0;
                     explosionParticles.length = 0;
                     floatingTexts.length = 0;
-                    tutorialTimer = 220;
+                    tutorialTimer = shouldShowTutorial() ? 480 : 0;
                     initLevel();
                     return;
                 }
                 if (isInsideRect(pos.x, pos.y, btnMainMenu)) {
+                    // FULL RESET — tüm oyun state'lerini temizle, bug oluşmasın
                     gameState.state = 'MENU';
                     gameState.level = 1;
                     gameState.score = 0;
+                    gameState.totalLiquid = 100;
+                    gameState.isTransitioning = false;
+                    gameState.isNewHighScore = false;
+                    topCup.fill = 100;
+                    topCup.angle = 0;
+                    targetAngle = 0;
+                    targetCup.fill = 0;
+                    targetCup.waveImpact = 0;
                     isDragging = false;
+                    adSystem.reset();
                     streamParticles.length = 0;
                     splashParticles.length = 0;
                     ripples.length = 0;
                     if (window.streamDrops) window.streamDrops.length = 0;
+                    perfectStreak = 0;
+                    seenThemes = new Set();
+                    comboCount = 0;
+                    comboMultiplier = 1;
+                    comboPopups.length = 0;
+                    saverTurns = 0;
+                    currentTheme.bgInner = [...themes[0].bgInner];
+                    currentTheme.bgOuter = [...themes[0].bgOuter];
+                    currentTheme.liquid = [...themes[0].liquid];
+                    lastThemeIndex = 0;
+                    themeRings.length = 0;
+                    burstLines.length = 0;
+                    explosionParticles.length = 0;
+                    floatingTexts.length = 0;
+                    toastQueue.length = 0;
+                    currentToast = null;
                     return;
                 }
                 if (btnSoundToggle && isInsideCircle(pos.x, pos.y, btnSoundToggle)) {
@@ -1464,7 +1526,8 @@
             let strokeColor = 'rgba(255,255,255,0.7)';
             let fillBody = 'rgba(255,255,255,0.03)';
             let glowColor = 'transparent';
-            let strokeW = 2.5;
+            // Mobilde bardak çizgisi biraz daha kalın - keskin görünür, bulanıklık azalır
+            let strokeW = _isMobile ? 3.0 : 2.5;
             let glassHighlight = 'rgba(255,255,255,0.5)';
             let shadowColor = 'rgba(0,0,0,0.35)';
 
@@ -1473,7 +1536,7 @@
                 strokeColor = 'rgba(255, 120, 40, 0.9)';
                 fillBody = 'rgba(255, 60, 0, 0.08)';
                 glowColor = 'rgba(255, 80, 0, 0.5)';
-                strokeW = 3;
+                strokeW = _isMobile ? 3.5 : 3;
                 glassHighlight = 'rgba(255,180,100,0.6)';
             } else if (shape === 'flask') { // ZEHİR
                 botW = topW * 1.15;
@@ -1486,7 +1549,7 @@
                 strokeColor = 'rgba(255, 215, 0, 1)';
                 fillBody = 'rgba(255, 200, 0, 0.1)';
                 glowColor = 'rgba(255, 215, 0, 0.4)';
-                strokeW = 3;
+                strokeW = _isMobile ? 3.5 : 3;
                 glassHighlight = 'rgba(255,255,200,0.8)';
             } else if (shape === 'honey') { // BAL
                 botW = topW * 1.25; // Tombul
@@ -1499,7 +1562,7 @@
                 strokeColor = 'rgba(180, 120, 255, 0.9)';
                 fillBody = 'rgba(130, 70, 255, 0.08)';
                 glowColor = 'rgba(150, 80, 255, 0.6)';
-                strokeW = 3;
+                strokeW = _isMobile ? 3.5 : 3;
                 glassHighlight = 'rgba(220,180,255,0.7)';
             }
 
@@ -2160,7 +2223,7 @@
             ctx.textAlign = 'center';
             ctx.fillStyle = 'rgba(150,210,240,0.75)';
             ctx.font = "16px 'Bebas Neue', cursive";
-            ctx.fillText('Doldur  •  Dök  •  İlerle', W/2, 165);
+            ctx.fillText('Fill  •  Pour  •  Advance', W/2, 165);
             ctx.restore();
 
             // Seviye rozeti (tema rengi çizgi)
@@ -2235,7 +2298,7 @@
                 ctx.fillStyle = 'white';
                 ctx.font = "bold 28px 'Bebas Neue', cursive";
                 ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-                ctx.fillText('▶  OYNA', W/2, pY2 + 2);
+                ctx.fillText('▶  PLAY', W/2, pY2 + 2);
                 ctx.textBaseline = 'alphabetic';
                 ctx.restore();
 
@@ -2272,18 +2335,18 @@
                 }
                 ctx.restore();
 
-                // ── BUGÜNÜN GÖREVLERİ PANELİ ──
+                // ── DAILY MISSIONS PANEL — REMOVED ──
+                // Panel completely hidden by request (no purpose for now, may return later)
+                if (false) {
                 let mY = 670;
                 ctx.save();
                 // Panel arka planı (biraz daha büyük ve görünür)
                 ctx.fillStyle = 'rgba(0,0,0,0.45)';
                 ctx.beginPath(); ctx.roundRect(W/2 - 155, mY, 310, 122, 14); ctx.fill();
                 ctx.strokeStyle = 'rgba(255,255,255,0.18)'; ctx.lineWidth = 1; ctx.stroke();
-                // Başlık - büyütüldü ve daha belirgin
                 ctx.fillStyle = 'rgba(255,255,255,0.75)';
                 ctx.font = "bold 14px 'Bebas Neue', cursive"; ctx.textAlign = 'center';
-                ctx.fillText('📋  GÜNLÜK GÖREVLER', W/2, mY + 20);
-                // Başlık altı ince ayırıcı çizgi
+                ctx.fillText('DAILY MISSIONS', W/2, mY + 20);
                 ctx.strokeStyle = 'rgba(255,255,255,0.12)';
                 ctx.lineWidth = 1;
                 ctx.beginPath();
@@ -2293,25 +2356,22 @@
                 dailyMissions.forEach(function(m, i) {
                     let my = mY + 36 + i * 28;
                     let pct = m.done ? 1 : Math.min(1, m.progress / m.target);
-                    // Progress bar arka planı (daha kalın)
                     ctx.fillStyle = 'rgba(255,255,255,0.08)';
                     ctx.beginPath(); ctx.roundRect(W/2 - 143, my, 286, 22, 11); ctx.fill();
-                    // Progress dolgu
                     if (pct > 0) {
                         ctx.fillStyle = m.done ? '#4caf50' : '#4fc3f7';
                         ctx.beginPath(); ctx.roundRect(W/2 - 143, my, 286 * pct, 22, 11); ctx.fill();
                     }
-                    // Görev metni - büyütüldü ve daha okunaklı
                     ctx.fillStyle = m.done ? 'rgba(180,255,180,1)' : 'rgba(255,255,255,0.95)';
                     ctx.font = "bold 14px 'Bebas Neue', cursive"; ctx.textAlign = 'left';
                     ctx.fillText((m.done ? '✅' : m.icon) + ' ' + m.text, W/2 - 137, my + 16);
-                    // Bonus puan - büyütüldü
                     ctx.textAlign = 'right';
                     ctx.fillStyle = '#ffd700';
                     ctx.font = "bold 14px 'Bebas Neue', cursive";
                     ctx.fillText('+' + m.bonus, W/2 + 137, my + 16);
                 });
                 ctx.restore();
+                }
 
                 // ── ALT BİLGİ ŞERİDİ ──
                 ctx.save();
@@ -2326,7 +2386,7 @@
                 ctx.fillStyle = 'rgba(255,255,255,0.28)';
                 ctx.font = "14px 'Bebas Neue', cursive";
                 ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-                ctx.fillText('POUR DOWN  v1.1  •  🏆 REKOR: ' + gameState.highScore, W / 2, H - 18);
+                ctx.fillText('POUR DOWN  v1.1  •  🏆 BEST: ' + gameState.highScore, W / 2, H - 18);
                 ctx.textBaseline = 'alphabetic';
                 ctx.restore();
 
@@ -2685,11 +2745,11 @@
                 ctx.save();
                 ctx.shadowColor = `rgba(${lq[0]},${lq[1]},${lq[2]},0.9)`; ctx.shadowBlur = 22;
                 ctx.fillStyle = 'white'; ctx.font = "bold 40px 'Bebas Neue', cursive";
-                ctx.fillText('OYUN BİTTİ', cx2, pY + 62);
+                ctx.fillText('GAME OVER', cx2, pY + 62);
                 ctx.restore();
 
                 ctx.fillStyle = 'rgba(255,255,255,0.5)'; ctx.font = "17px 'Bebas Neue', cursive";
-                ctx.fillText('Level ' + gameState.level + "'e ulaştın", cx2, pY + 95);
+                ctx.fillText('You reached Level ' + gameState.level, cx2, pY + 95);
 
                 // Ayraç
                 ctx.strokeStyle = 'rgba(255,255,255,0.07)'; ctx.lineWidth = 1;
@@ -2700,7 +2760,7 @@
                 scorePct = scorePct < 1 ? 1 - Math.pow(1 - scorePct, 3) : 1;
                 let displayScore = Math.round(scorePct * gameState.score);
                 ctx.fillStyle = 'rgba(255,255,255,0.6)'; ctx.font = "16px 'Bebas Neue', cursive";
-                ctx.fillText('SKOR', cx2, pY + 155);
+                ctx.fillText('SCORE', cx2, pY + 155);
                 ctx.fillStyle = 'white'; ctx.font = "72px 'Bebas Neue', cursive";
                 ctx.fillText(displayScore, cx2, pY + 225);
 
@@ -2750,7 +2810,7 @@
                     ctx.beginPath(); ctx.roundRect(pX+20, b3Y-20, pW-40, 40, 20); ctx.fill();
                     ctx.strokeStyle = 'rgba(50,200,100,0.4)'; ctx.lineWidth = 1; ctx.stroke();
                     ctx.fillStyle = 'rgba(100,255,150,0.85)'; ctx.font = "14px 'Bebas Neue', cursive";
-                    ctx.fillText('🎥  Reklam izle → +20% Sıvı', cx2, b3Y + 5);
+                    ctx.fillText('🎥  Watch Ad → +20% Liquid', cx2, b3Y + 5);
                     btnContinue.y = b3Y; 
                 }
 
@@ -2772,7 +2832,7 @@
                 ctx.fillStyle = 'rgba(255,255,255,0.2)';
                 ctx.beginPath(); ctx.roundRect(cx2 - 152, b1Y-30, 304, 26, [22,22,0,0]); ctx.fill();
                 ctx.fillStyle = 'white'; ctx.font = "bold 26px 'Bebas Neue', cursive";
-                ctx.fillText('▶  TEKRAR OYNA', cx2, b1Y + 9);
+                ctx.fillText('▶  PLAY AGAIN', cx2, b1Y + 9);
                 ctx.restore();
                 btnReplay.x = cx2; btnReplay.y = b1Y; btnReplay.w = 320; btnReplay.h = 64; 
 
@@ -2782,7 +2842,7 @@
                 ctx.beginPath(); ctx.roundRect(pX+20, b2Y-24, pW-40, 48, 24); ctx.fill();
                 ctx.strokeStyle = 'rgba(255,255,255,0.15)'; ctx.lineWidth = 1; ctx.stroke();
                 ctx.fillStyle = 'rgba(255,255,255,0.7)'; ctx.font = "18px 'Bebas Neue', cursive";
-                ctx.fillText('ANA MENÜ', cx2, b2Y + 7);
+                ctx.fillText('MAIN MENU', cx2, b2Y + 7);
                 btnGameOverMenu.y = b2Y; 
 
                 // BAŞARIMLAR — GİZLENDİ (kullanıcı isteğiyle, ileride geri açılabilir)
@@ -2792,7 +2852,7 @@
                     ctx.textAlign = 'center';
                     ctx.fillStyle = 'rgba(255,255,255,0.3)';
                     ctx.font = "11px 'Bebas Neue', cursive";
-                    ctx.fillText('BAŞARIMLAR', canvas.width/2, aY);
+                    ctx.fillText('ACHIEVEMENTS', canvas.width/2, aY);
                     let iconSize = 28;
                     let total = unlockedAchievements.length;
                     let startX = canvas.width/2 - (total * (iconSize + 4)) / 2 + iconSize/2;
@@ -3313,7 +3373,8 @@
             ctx.restore();
 
             // --- TUTORIAL HİNTİ (Level 1) ---
-            if (gameState.level === 1 && tutorialTimer > 0 && !gameState.isTransitioning) {
+            // Tutorial - ilk 3 levelde görünür (oyuncu öğreniyor)
+            if (gameState.level <= 3 && tutorialTimer > 0 && !gameState.isTransitioning) {
                 // Eğim başlayınca hızla söner
                 if (Math.abs(topCup.angle) > 8) tutorialTimer = Math.min(tutorialTimer, 45);
                 tutorialTimer--;
@@ -3335,7 +3396,7 @@
                 // İpucu yazısı
                 ctx.fillStyle = 'rgba(255,255,255,0.75)';
                 ctx.font = "14px 'Bebas Neue', cursive";
-                ctx.fillText('Sürükle', hx, hy + 1);
+                ctx.fillText('Drag', hx, hy + 1);
 
                 // Sağ ok
                 ctx.fillStyle = 'rgba(255,255,255,0.9)';
@@ -3344,7 +3405,7 @@
 
                 ctx.fillStyle = 'rgba(255,255,255,0.45)';
                 ctx.font = "12px 'Bebas Neue', cursive";
-                ctx.fillText('bardağı eğilt, sıvıyı dök', hx, hy + 20);
+                ctx.fillText('tilt the cup, pour the liquid', hx, hy + 20);
                 ctx.restore();
             }
 
@@ -3380,7 +3441,7 @@
             ctx.fillRect(scrX + 5, hudY - 12, scrW - 10, 1);
 
             ctx.fillStyle = 'rgba(255,255,255,0.6)'; ctx.font = "11px 'Bebas Neue', cursive"; ctx.textAlign = 'center';
-            ctx.fillText('SKOR', canvas.width/2, hudY - 1);
+            ctx.fillText('SCORE', canvas.width/2, hudY - 1);
             // Skor zıplama animasyonu
             window.scorePulse = window.scorePulse || 1;
             window.scorePulse += (1 - window.scorePulse) * 0.15;
@@ -3535,7 +3596,7 @@
                 ctx.fillStyle = rG;
                 ctx.beginPath(); ctx.roundRect(pX+16, r1Y-26, pW-32, 52, 26); ctx.fill();
                 ctx.fillStyle = 'white'; ctx.font = "bold 20px 'Bebas Neue', cursive";
-                ctx.fillText('▶  DEVAM ET', cx3, r1Y + 7);
+                ctx.fillText('▶  RESUME', cx3, r1Y + 7);
                 btnResume.y = r1Y;
 
                 // TEKRAR OYNA butonu (yeni)
@@ -3544,7 +3605,7 @@
                 ctx.beginPath(); ctx.roundRect(pX+16, rrY-22, pW-32, 44, 22); ctx.fill();
                 ctx.strokeStyle = 'rgba(255,180,80,0.5)'; ctx.lineWidth = 1.2; ctx.stroke();
                 ctx.fillStyle = 'rgba(255,210,120,1)'; ctx.font = "17px 'Bebas Neue', cursive";
-                ctx.fillText('🔄  TEKRAR OYNA', cx3, rrY + 6);
+                ctx.fillText('🔄  PLAY AGAIN', cx3, rrY + 6);
 
                 // ANA MENÜ butonu
                 let r2Y = pY + 270;
@@ -3552,7 +3613,7 @@
                 ctx.beginPath(); ctx.roundRect(pX+16, r2Y-22, pW-32, 44, 22); ctx.fill();
                 ctx.strokeStyle = 'rgba(255,255,255,0.15)'; ctx.lineWidth = 1; ctx.stroke();
                 ctx.fillStyle = 'rgba(255,255,255,0.7)'; ctx.font = "17px 'Bebas Neue', cursive";
-                ctx.fillText('🏠  ANA MENÜ', cx3, r2Y + 6);
+                ctx.fillText('🏠  MAIN MENU', cx3, r2Y + 6);
 
                 // SES + MÜZİK TOGGLE BUTONLARI
                 let togY = pY + pH - 36;
@@ -3665,7 +3726,7 @@
                 ctx.font = "bold 22px 'Bebas Neue', cursive";
                 ctx.fillStyle = `rgb(${lq[0]},${lq[1]},${lq[2]})`;
                 // İsim altında ince çizgi (vurgu)
-                ctx.fillText(themeAnnounceData.name + ' MODU', 0, 28);
+                ctx.fillText(themeAnnounceData.name + ' MODE', 0, 28);
                 
                 ctx.restore();
                 themeAnnounceTimer--;
